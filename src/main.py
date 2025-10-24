@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from src.core.logging import logger
-from src.api import asset, sensor, command, admin
+from src.api import asset, sensor, admin
 from src.core.errors import install_problem_details
 
 app = FastAPI(
@@ -12,7 +12,6 @@ app = FastAPI(
 # Include routers
 app.include_router(asset.router)
 app.include_router(sensor.router)
-app.include_router(command.router)
 app.include_router(admin.router)
 
 # Install problem details for RFC7807 error responses

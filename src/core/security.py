@@ -9,10 +9,21 @@ from sqlalchemy.orm import Session
 
 from src.db.session import get_db
 from src.db.models import ApiKey, ApiClient, Project
-from src.api.dependencies import project_from_path
 
 
 security = HTTPBearer()
+
+
+def project_from_path(project_code: str, db: Session = Depends(get_db)) -> Project:
+    """
+    FastAPI dependency that reads {project_code} from the path, looks up the project in DB, 
+    404s if it doesn't exist, and injects the Project row into your endpoint so every 
+    handler already has the resolved tenant.
+    """
+    proj = db.query(Project).filter(Project.code == project_code).first()
+    if not proj:
+        raise HTTPException(404, "project not found")
+    return proj
 
 
 def hash_api_key(raw_key: str, salt: bytes = None) -> tuple[bytes, bytes]:
@@ -88,7 +99,7 @@ def authenticate_client(
     raw_key = credentials.credentials
 
     # Find matching API key in database
-    # Note: In production, you'd want to index on a hash prefix for performance
+    #TODO: In production I need to add an index on a hash prefix for performance
     api_keys = db.query(ApiKey).join(ApiClient).filter(
         ApiClient.project_id == project.project_id,
         ApiClient.status == "active"

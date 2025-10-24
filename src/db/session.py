@@ -1,10 +1,3 @@
-# src/db/session.py
-"""
-Database session management for the adaptive lighting API.
-
-This module configures SQLAlchemy database connections and provides
-dependency injection for database sessions in FastAPI endpoints.
-"""
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from src.core.config import settings

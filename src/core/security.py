@@ -99,7 +99,7 @@ def authenticate_client(
     raw_key = credentials.credentials
 
     # Find matching API key in database
-    #TODO: In production I need to add an index on a hash prefix for performance
+    #TODO: In production I need to add an index on the hash prefix for performance
     api_keys = db.query(ApiKey).join(ApiClient).filter(
         ApiClient.project_id == project.project_id,
         ApiClient.status == "active"
@@ -107,11 +107,17 @@ def authenticate_client(
 
     authenticated_key = None
     for api_key in api_keys:
-        # In a real implementation, you'd store salt separately and verify properly
-        # For now, simplified check (you'll need to enhance this)
-        if raw_key.startswith(api_key.api_key_id[:8]):  # Simple prefix match
-            authenticated_key = api_key
-            break
+        # Check if this key matches by prefix first (performance optimization)
+        if raw_key.startswith(api_key.api_key_id[:8]):
+            # Extract salt and hash from stored value
+            if len(api_key.hash) >= 32:  # Ensure we have at least salt
+                salt = api_key.hash[:32]  # First 32 bytes are salt
+                stored_hash = api_key.hash[32:]  # Rest is hash
+
+                # Verify the full key
+                if verify_api_key(raw_key, stored_hash, salt):
+                    authenticated_key = api_key
+                    break
 
     if not authenticated_key:
         raise HTTPException(

@@ -1,10 +1,15 @@
 from datetime import datetime, timezone
 from typing import List, Optional
+import secrets
+import string
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
-from src.db.models import Policy, AuditLog
+from src.db.models import Policy, AuditLog, ApiClient, ApiKey, Project
 from src.schemas.admin import PolicyRequest
+from src.services.credential_service import CredentialService
+from src.services.scope_service import ScopeService
+from src.core.security import hash_api_key
 
 
 class AdminService:
@@ -208,3 +213,171 @@ class AdminService:
             query = query.filter(AuditLog.action == action_filter)
 
         return query.order_by(desc(AuditLog.timestamp)).offset(offset).limit(limit).all()
+
+    @staticmethod
+    def store_exedra_config(
+        api_client_id: str,
+        api_token: str,
+        base_url: str,
+        project_id: str,
+        environment: str,
+        db: Session
+    ) -> tuple[str, str, datetime]:
+        """
+        Store EXEDRA configuration (API token + base URL) for a client.
+        
+        Args:
+            api_client_id: ID of the API client
+            api_token: EXEDRA API token
+            base_url: EXEDRA base URL
+            project_id: Project ID for authorization
+            environment: Environment (prod, test, staging)
+            db: Database session
+            
+        Returns:
+            Tuple of (token_credential_id, url_credential_id, created_at)
+            
+        Raises:
+            ValueError: If API client not found or doesn't belong to project
+        """
+        # Verify the API client exists and belongs to this project
+        api_client = db.query(ApiClient).filter(
+            ApiClient.api_client_id == api_client_id,
+            ApiClient.project_id == project_id
+        ).first()
+
+        if not api_client:
+            raise ValueError(f"API client {api_client_id} not found in this project")
+
+        # Store both credentials using CredentialService
+        token_cred, url_cred = CredentialService.store_exedra_config(
+            api_client=api_client,
+            api_token=api_token,
+            base_url=base_url,
+            db=db,
+            environment=environment
+        )
+
+        return token_cred.credential_id, url_cred.credential_id, token_cred.created_at
+
+    @staticmethod
+    def generate_api_key(
+        api_client_id: str,
+        project_id: str,
+        scopes: List[str],
+        db: Session,
+    ) -> tuple[str, str]:
+        """
+        Generate a new API key for a client.
+        
+        Args:
+            api_client_id: ID of the API client
+            project_id: Project ID for authorization
+            scopes: List of scopes for the API key (e.g., ['asset', 'admin'])
+            db: Database session
+            
+        Returns:
+            Tuple of (api_key_id, raw_api_key)
+            
+        Raises:
+            ValueError: If API client not found or doesn't belong to project
+        """
+        # Verify the API client exists and belongs to this project
+        api_client = db.query(ApiClient).filter(
+            ApiClient.api_client_id == api_client_id,
+            ApiClient.project_id == project_id
+        ).first()
+
+        if not api_client:
+            raise ValueError(f"API client {api_client_id} not found in this project")
+
+        # Validate scopes using database
+        valid_scopes, invalid_scopes = ScopeService.validate_scopes(scopes, db=db)
+        if not valid_scopes:
+            raise ValueError(f"Invalid scopes: {', '.join(invalid_scopes)}")
+
+        # Generate a secure random API key
+        # Format: {prefix}_{random_part} where prefix is first 8 chars of api_key_id
+        alphabet = string.ascii_letters + string.digits
+        raw_key_suffix = ''.join(secrets.choice(alphabet) for _ in range(32))
+
+        # Create the API key record first to get the UUID
+        api_key = ApiKey(
+            api_client_id=api_client_id,
+            scopes=scopes,
+            hash=b'',  # Temporary, will be updated below
+        )
+
+        db.add(api_key)
+        db.flush()  # Get the generated UUID
+
+        # Create the full raw key with prefix
+        raw_api_key = f"{api_key.api_key_id[:8]}_{raw_key_suffix}"
+
+        # Hash the raw key and update the record
+        key_hash, salt = hash_api_key(raw_api_key)
+        # Store both hash and salt together
+        api_key.hash = salt + key_hash  # Prepend salt to hash for storage
+
+        db.commit()
+
+        return api_key.api_key_id, raw_api_key
+
+    @staticmethod
+    def get_api_client_by_name(
+        project_code: str,
+        client_name: str,
+        db: Session
+    ) -> Optional[ApiClient]:
+        """
+        Get API client by name within a project.
+        
+        Args:
+            project_code: Project code
+            client_name: Name of the API client
+            db: Database session
+            
+        Returns:
+            ApiClient instance or None if not found
+        """
+        return db.query(ApiClient).join(Project).filter(
+            Project.code == project_code,
+            ApiClient.name == client_name
+        ).first()
+
+    @staticmethod
+    def sync_scope_catalogue_with_audit(
+        project_id: str,
+        api_client_name: str,
+        db: Session
+    ) -> int:
+        """
+        Sync scope catalogue to database with audit logging.
+        
+        Args:
+            project_id: Project ID for audit trail
+            api_client_name: Name of API client performing sync
+            db: Database session
+            
+        Returns:
+            Number of scopes updated
+        """
+        # Perform the sync
+        count = ScopeService.sync_catalogue_to_database(db)
+
+        # Create audit log entry
+        audit_entry = AuditLog(
+            actor="api",
+            project_id=project_id,
+            action="scope_catalogue_sync",
+            entity="system",
+            entity_id="scope_catalogue",
+            details={
+                "scopes_updated": count,
+                "api_client": api_client_name
+            }
+        )
+        db.add(audit_entry)
+        db.commit()
+
+        return count

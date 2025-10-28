@@ -1,11 +1,13 @@
 from typing import Optional, List
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from src.core.security import AuthenticatedClient, require_scopes
 from src.db.session import get_db
 from src.services.admin_service import AdminService
-from src.schemas.admin import PolicyRequest, PolicyResponse, KillSwitchRequest, KillSwitchResponse, AuditLogResponse
+from src.services.scope_service import ScopeService
+from src.schemas.admin import PolicyRequest, PolicyResponse, KillSwitchRequest, KillSwitchResponse, AuditLogResponse, ExedraConfigRequest, ExedraConfigResponse, ApiKeyRequest, ApiKeyResponse, ScopeListResponse, ScopeInfo
 
 router = APIRouter(prefix="/v1/{project_code}/admin", tags=["admin"])
 
@@ -13,7 +15,7 @@ router = APIRouter(prefix="/v1/{project_code}/admin", tags=["admin"])
 @router.post("/policy", response_model=PolicyResponse)
 async def update_policy(
     request: PolicyRequest,
-    client: AuthenticatedClient = Depends(require_scopes("admin")),
+    client: AuthenticatedClient = Depends(require_scopes("admin:policy:write")),
     db: Session = Depends(get_db)
 ):
     """
@@ -52,7 +54,7 @@ async def update_policy(
 
 @router.get("/policy", response_model=PolicyResponse)
 async def get_current_policy(
-    client: AuthenticatedClient = Depends(require_scopes("admin")),
+    client: AuthenticatedClient = Depends(require_scopes("admin:policy:read")),
     db: Session = Depends(get_db)
 ):
     """
@@ -82,7 +84,7 @@ async def get_current_policy(
 @router.post("/kill-switch", response_model=KillSwitchResponse)
 async def toggle_kill_switch(
     request: KillSwitchRequest,
-    client: AuthenticatedClient = Depends(require_scopes("admin")),
+    client: AuthenticatedClient = Depends(require_scopes("admin:killswitch")),
     db: Session = Depends(get_db)
 ):
     """
@@ -117,7 +119,7 @@ async def toggle_kill_switch(
 
 @router.get("/kill-switch", response_model=KillSwitchResponse)
 async def get_kill_switch_status(
-    client: AuthenticatedClient = Depends(require_scopes("admin")),
+    client: AuthenticatedClient = Depends(require_scopes("admin:policy:read")),
     db: Session = Depends(get_db)
 ):
     """
@@ -143,7 +145,7 @@ async def get_kill_switch_status(
 async def get_audit_logs(
     limit: Optional[int] = Query(100, description="Maximum number of logs to return", ge=1, le=1000),
     offset: Optional[int] = Query(0, description="Number of logs to skip", ge=0),
-    client: AuthenticatedClient = Depends(require_scopes("admin")),
+    client: AuthenticatedClient = Depends(require_scopes("admin:audit:read")),
     db: Session = Depends(get_db)
 ):
     """
@@ -173,3 +175,172 @@ async def get_audit_logs(
         )
         for log in logs
     ]
+
+
+@router.post("/exedra-config", response_model=ExedraConfigResponse)
+async def store_exedra_config(
+    request: ExedraConfigRequest,
+    client: AuthenticatedClient = Depends(require_scopes("admin:credentials:write")),
+    db: Session = Depends(get_db)
+):
+    """
+    Store complete EXEDRA configuration (API token + base URL) for a client.
+    
+    This endpoint allows administrators to securely store both EXEDRA API tokens
+    and base URLs for clients, enabling them to access their specific EXEDRA tenant's
+    lighting control programs.
+    """
+    try:
+        # Store EXEDRA configuration using AdminService
+        token_credential_id, url_credential_id, created_at = AdminService.store_exedra_config(
+            api_client_id=request.api_client_id,
+            api_token=request.api_token,
+            base_url=request.base_url,
+            project_id=client.project.project_id,
+            environment=request.environment,
+            db=db
+        )
+
+        return ExedraConfigResponse(
+            token_credential_id=token_credential_id,
+            url_credential_id=url_credential_id,
+            api_client_id=request.api_client_id,
+            environment=request.environment,
+            created_at=created_at
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        ) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to store EXEDRA configuration"
+        ) from e
+
+
+@router.post("/api-key", response_model=ApiKeyResponse)
+async def generate_api_key(
+    request: ApiKeyRequest,
+    client: AuthenticatedClient = Depends(require_scopes("admin:apikeys:write")),
+    db: Session = Depends(get_db)
+):
+    """
+    Generate a new API key for a client.
+    
+    This endpoint allows administrators to create API keys for clients within their project.
+    The generated API key will be returned only once - store it securely!
+    """
+    try:
+        # Get the API client by name
+        api_client = AdminService.get_api_client_by_name(
+            project_code=client.project.code,
+            client_name=request.api_client_name,
+            db=db
+        )
+
+        if not api_client:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"API client '{request.api_client_name}' not found in project '{client.project.code}'"
+            )
+
+        # Generate the API key
+        api_key_id, raw_api_key = AdminService.generate_api_key(
+            api_client_id=api_client.api_client_id,
+            project_id=client.project.project_id,
+            scopes=request.scopes,
+            db=db
+        )
+
+        return ApiKeyResponse(
+            api_key_id=api_key_id,
+            api_key=raw_api_key,
+            api_client_id=api_client.api_client_id,
+            api_client_name=api_client.name,
+            scopes=request.scopes,
+            created_at=datetime.now()
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        ) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate API key"
+        ) from e
+
+
+@router.get("/scopes", response_model=ScopeListResponse)
+async def list_available_scopes(
+    client: AuthenticatedClient = Depends(require_scopes("admin:apikeys:write")),
+    db: Session = Depends(get_db)
+):
+    """
+    List all available API scopes, recommended combinations, and current key's active scopes.
+    
+    This endpoint provides the complete catalogue of available scopes
+    for API key generation, along with recommended scope combinations
+    for common use cases, and shows which scopes are active for the
+    current API key making the request.
+    """
+    try:
+        # Get scopes from database (single source of truth)
+        all_scopes = ScopeService.get_all_scopes(db=db)
+        recommended = ScopeService.get_recommended_scopes()
+
+        scope_list = [
+            ScopeInfo(
+                scope_code=scope_code,
+                description=details["description"],
+                category=details["category"]
+            )
+            for scope_code, details in all_scopes.items()
+        ]
+
+        return ScopeListResponse(
+            scopes=scope_list,
+            recommended_combinations=recommended,
+            current_key_scopes=client.scopes
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve scope catalogue"
+        ) from e
+
+
+@router.post("/scopes/sync")
+async def sync_scope_catalogue(
+    client: AuthenticatedClient = Depends(require_scopes("admin:apikeys:write")),
+    db: Session = Depends(get_db)
+):
+    """
+    Sync the scope catalogue to the database.
+    
+    This endpoint updates the database scope_catalogue table with the latest
+    scope definitions from the codebase.
+    """
+    try:
+        count = AdminService.sync_scope_catalogue_with_audit(
+            project_id=client.project.project_id,
+            api_client_name=client.api_client.name,
+            db=db
+        )
+
+        return {
+            "message": "Scope catalogue synced successfully",
+            "scopes_updated": count
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to sync scope catalogue"
+        ) from e

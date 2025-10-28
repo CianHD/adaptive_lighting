@@ -6,9 +6,6 @@ from urllib3.exceptions import InsecureRequestWarning
 
 from src.core.config import settings
 
-# Load EXEDRA authentication
-EXEDRA_TOKEN = settings.EXEDRA_TOKEN
-EXEDRA_BASE_URL = getattr(settings, 'EXEDRA_BASE_URL', 'https://au-scs.oceania-schreder-exedra.com')
 # SSL verification setting - should be True in production
 EXEDRA_VERIFY_SSL = getattr(settings, 'EXEDRA_VERIFY_SSL', True)
 
@@ -17,28 +14,27 @@ if not EXEDRA_VERIFY_SSL:
     warnings.filterwarnings("ignore", category=InsecureRequestWarning)
     print("WARNING: EXEDRA SSL verification is disabled. This should only be used in development!")
 
-if not EXEDRA_TOKEN:
-    raise RuntimeError("EXEDRA_TOKEN missing from configuration")
-
 
 class ExedraService:
     """Service for interfacing with EXEDRA control programs API"""
 
     @staticmethod
-    def _get_headers() -> Dict[str, str]:
+    def _get_headers(token: str) -> Dict[str, str]:
         """Get standard headers for EXEDRA API requests"""
         return {
-            "Authorization": f"Bearer {EXEDRA_TOKEN}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
 
     @staticmethod
-    def get_control_program(program_id: str) -> Dict[str, Any]:
+    def get_control_program(program_id: str, token: str, base_url: str) -> Dict[str, Any]:
         """
         Retrieve a control program from EXEDRA
         
         Args:
             program_id: The EXEDRA control program ID
+            token: Client's EXEDRA API token
+            base_url: Client's EXEDRA base URL
             
         Returns:
             Dictionary containing the control program data
@@ -50,8 +46,14 @@ class ExedraService:
         if not program_id:
             raise ValueError("program_id cannot be empty")
 
-        url = f"{EXEDRA_BASE_URL}/api/v1/controlprograms/{program_id}"
-        headers = ExedraService._get_headers()
+        if not token:
+            raise ValueError("EXEDRA token cannot be empty")
+
+        if not base_url:
+            raise ValueError("EXEDRA base URL cannot be empty")
+
+        url = f"{base_url}/api/v1/controlprograms/{program_id}"
+        headers = ExedraService._get_headers(token)
 
         try:
             response = requests.get(url, headers=headers, timeout=30, verify=EXEDRA_VERIFY_SSL)
@@ -64,6 +66,8 @@ class ExedraService:
     def update_control_program(
         program_id: str,
         commands: List[Dict[str, Any]],
+        token: str,
+        base_url: str,
         asset_name: str = None,
         description: str = None
     ) -> bool:
@@ -73,6 +77,8 @@ class ExedraService:
         Args:
             program_id: The EXEDRA control program ID
             commands: List of command objects to set
+            token: Client's EXEDRA API token
+            base_url: Client's EXEDRA base URL
             asset_name: Optional asset name for the schedule title
             description: Optional description override
             
@@ -87,10 +93,14 @@ class ExedraService:
             raise ValueError("program_id cannot be empty")
         if not isinstance(commands, list):
             raise ValueError("commands must be a list")
+        if not token:
+            raise ValueError("EXEDRA token cannot be empty")
+        if not base_url:
+            raise ValueError("EXEDRA base URL cannot be empty")
 
         # First get the existing program to preserve metadata
         try:
-            existing = ExedraService.get_control_program(program_id)
+            existing = ExedraService.get_control_program(program_id, token, base_url)
         except Exception as e:
             raise RuntimeError(f"Cannot retrieve existing program {program_id}: {str(e)}") from e
 
@@ -110,8 +120,8 @@ class ExedraService:
             "tenant": existing.get("tenant", "hyperion"),
         }
 
-        url = f"{EXEDRA_BASE_URL}/api/v1/controlprograms/{program_id}"
-        headers = ExedraService._get_headers()
+        url = f"{base_url}/api/v1/controlprograms/{program_id}"
+        headers = ExedraService._get_headers(token)
 
         try:
             response = requests.put(url, headers=headers, json=payload, timeout=30, verify=EXEDRA_VERIFY_SSL)

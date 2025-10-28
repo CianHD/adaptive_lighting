@@ -3,7 +3,7 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 from sqlalchemy import Integer, BigInteger, String, Text, DateTime, text, ForeignKey, CheckConstraint, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from db.base import Base
+from src.db.base import Base
 
 
 # ---------- Core ----------
@@ -28,6 +28,7 @@ class ApiClient(Base):
 
     project: Mapped[Project] = relationship(back_populates="api_clients")
     api_keys: Mapped[list["ApiKey"]] = relationship(back_populates="api_client", cascade="all, delete-orphan")
+    credentials: Mapped[list["ClientCredential"]] = relationship(back_populates="api_client", cascade="all, delete-orphan")
 
 class ApiKey(Base):
     __tablename__ = "api_key"
@@ -39,15 +40,35 @@ class ApiKey(Base):
 
     api_client: Mapped[ApiClient] = relationship(back_populates="api_keys")
 
+class ClientCredential(Base):
+    __tablename__ = "client_credential"
+    credential_id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, server_default=text("gen_random_uuid()"))
+    api_client_id: Mapped[str] = mapped_column(ForeignKey("api_client.api_client_id", ondelete="CASCADE"), nullable=False, index=True)
+    service_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    credential_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    encrypted_value: Mapped[str] = mapped_column(Text, nullable=False)
+    environment: Mapped[str | None] = mapped_column(String(10))  # 'prod', 'test', 'staging'
+    created_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
+    expires_at: Mapped["datetime | None"] = mapped_column(DateTime(timezone=True))
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
 
-# ---------- Catalogs ----------
-class ScopeCatalog(Base):
-    __tablename__ = "scope_catalog"
+    api_client: Mapped[ApiClient] = relationship(back_populates="credentials")
+
+    __table_args__ = (
+        UniqueConstraint('api_client_id', 'service_name', 'environment', name='uq_client_service_env'),
+        Index('ix_client_credential_active', 'api_client_id', 'service_name', 'is_active'),
+    )
+
+
+# ---------- Catalogues ----------
+class ScopeCatalogue(Base):
+    __tablename__ = "scope_catalogue"
     scope_code: Mapped[str] = mapped_column(String, primary_key=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String, nullable=False)  # e.g., 'asset', 'sensor', 'admin'
 
-class SensorCapabilityCatalog(Base):
-    __tablename__ = "sensor_capability_catalog"
+class SensorCapabilityCatalogue(Base):
+    __tablename__ = "sensor_capability_catalogue"
     capability_code: Mapped[str] = mapped_column(String, primary_key=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
 
@@ -75,7 +96,7 @@ class Asset(Base):
     name: Mapped[str | None] = mapped_column(String)
     road_class: Mapped[str | None] = mapped_column(String)
     control_mode: Mapped[str] = mapped_column(String, nullable=False)  # 'optimise'|'passthrough'
-    metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    asset_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
     project: Mapped[Project] = relationship(back_populates="assets")
     links: Mapped[list["SensorAssetLink"]] = relationship(back_populates="asset", cascade="all, delete-orphan")
@@ -92,7 +113,7 @@ class Sensor(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("project.project_id", ondelete="CASCADE"), nullable=False, index=True)
     external_id: Mapped[str] = mapped_column(String, nullable=False)
     sensor_type_id: Mapped[str] = mapped_column(ForeignKey("sensor_type.sensor_type_id"), nullable=False)
-    metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    sensor_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
     project: Mapped[Project] = relationship(back_populates="sensors")
     sensor_type: Mapped[SensorType] = relationship()

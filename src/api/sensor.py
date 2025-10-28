@@ -15,7 +15,7 @@ router = APIRouter(prefix="/v1/{project_code}/sensor", tags=["sensor"])
 async def ingest_sensor_data(
     request: SensorIngestRequest,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    client: AuthenticatedClient = Depends(require_scopes("ingest:write")),
+    client: AuthenticatedClient = Depends(require_scopes("sensor:ingest")),
     db: Session = Depends(get_db)
 ):
     """

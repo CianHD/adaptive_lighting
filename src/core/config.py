@@ -16,8 +16,18 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str
     EMAIL_FROM: str
 
-    # EXEDRA API Token
-    EXEDRA_KEY: str
+    # Credential encryption for ClientCredential table
+    CREDENTIAL_ENCRYPTION_KEY: str
+
+    # EXEDRA SSL Configuration
+    EXEDRA_VERIFY_SSL: bool = True
+
+    # Application settings
+    ENVIRONMENT: str = "development"
+    LOG_LEVEL: str = "INFO" # TODO: Are any of these used?
+    HOST: str = "0.0.0.0"
+    PORT: int = 8000
+    DEBUG: bool = True
 
     # Feature toggles
     REQUIRE_HMAC: bool = False

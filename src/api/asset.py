@@ -43,9 +43,6 @@ async def get_asset_state(
     return asset_state
 
 
-
-
-
 @router.get("/{external_id}", response_model=AssetResponse)
 async def get_asset(
     external_id: str,
@@ -166,7 +163,7 @@ async def get_asset_schedule(
 async def update_asset_schedule(
     request: ScheduleCommandRequest,
     asset_external_id: str = Query(..., description="External ID of the asset"),
-    client: AuthenticatedClient = Depends(require_scopes("asset:write")),
+    client: AuthenticatedClient = Depends(require_scopes("asset:command")),
     db: Session = Depends(get_db)
 ):
     """
@@ -231,7 +228,7 @@ async def update_asset_schedule(
 async def realtime_command(
     request: RealtimeCommandRequest,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    client: AuthenticatedClient = Depends(require_scopes("command:realtime.write")),
+    client: AuthenticatedClient = Depends(require_scopes("asset:command")),
     db: Session = Depends(get_db)
 ):
     """

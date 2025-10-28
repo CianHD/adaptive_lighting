@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from src.db.models import Asset, Schedule, AuditLog
 from src.schemas.asset import AssetResponse, AssetStateResponse
 from src.services.exedra_service import ExedraService
+from src.services.credential_service import CredentialService
 
 
 class AssetService:
@@ -83,7 +84,7 @@ class AssetService:
             name=asset.name,
             control_mode=asset.control_mode,
             road_class=asset.road_class,
-            metadata=asset.metadata
+            metadata=asset.asset_metadata
         )
 
     @staticmethod
@@ -146,15 +147,30 @@ class AssetService:
             RuntimeError: If EXEDRA API call fails
         """
         # Get EXEDRA program ID from asset metadata
-        metadata = asset.metadata or {}
+        metadata = asset.asset_metadata or {}
         exedra_program_id = metadata.get("exedra_program_id")
 
         if not exedra_program_id:
             raise ValueError(f"Asset {asset.external_id} has no EXEDRA program ID configured")
 
+        # Get client's EXEDRA configuration (token and base URL)
+        api_client = asset.project.api_clients[0] if asset.project.api_clients else None
+        if not api_client:
+            raise ValueError(f"No API client found for asset {asset.external_id}")
+
+        exedra_config = CredentialService.get_exedra_config(api_client, db)
+        if not exedra_config.get("token"):
+            raise ValueError(f"No EXEDRA API token found for client {api_client.name}")
+        if not exedra_config.get("base_url"):
+            raise ValueError(f"No EXEDRA base URL found for client {api_client.name}")
+
         try:
-            # Fetch from EXEDRA
-            exedra_data = ExedraService.get_control_program(exedra_program_id)
+            # Fetch from EXEDRA using client's token and base URL
+            exedra_data = ExedraService.get_control_program(
+                exedra_program_id,
+                exedra_config["token"],
+                exedra_config["base_url"]
+            )
 
             # Convert EXEDRA commands to our schedule format
             steps = []
@@ -246,11 +262,22 @@ class AssetService:
             RuntimeError: If EXEDRA API call fails
         """
         # Get EXEDRA program ID
-        metadata = asset.metadata or {}
+        metadata = asset.asset_metadata or {}
         exedra_program_id = metadata.get("exedra_program_id")
 
         if not exedra_program_id:
             raise ValueError(f"Asset {asset.external_id} has no EXEDRA program ID configured")
+
+        # Get client's EXEDRA configuration (token and base URL)
+        api_client = asset.project.api_clients[0] if asset.project.api_clients else None
+        if not api_client:
+            raise ValueError(f"No API client found for asset {asset.external_id}")
+
+        exedra_config = CredentialService.get_exedra_config(api_client, db)
+        if not exedra_config.get("token"):
+            raise ValueError(f"No EXEDRA API token found for client {api_client.name}")
+        if not exedra_config.get("base_url"):
+            raise ValueError(f"No EXEDRA base URL found for client {api_client.name}")
 
         try:
             # Convert schedule steps to EXEDRA commands
@@ -263,6 +290,8 @@ class AssetService:
             success = ExedraService.update_control_program(
                 program_id=exedra_program_id,
                 commands=exedra_commands,
+                token=exedra_config["token"],
+                base_url=exedra_config["base_url"],
                 asset_name=asset.name
             )
 

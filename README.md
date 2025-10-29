@@ -117,4 +117,4 @@ All endpoints return RFC7807 problem details for errors:
 - 404: Not Found (missing resources)
 - 422: Unprocessable Entity (policy violations)
 
-The API is now ready for initial testing and can be extended with the background services when you're ready to implement the optimization algorithms and EXEDRA integration.
+The API is now ready for initial testing and can be extended with the background services when you're ready to implement the optimization algorithms and EXEDRA integration. (test)

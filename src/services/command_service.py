@@ -23,7 +23,7 @@ class CommandService:
         if not 0 <= dim_percent <= 100:
             return False, "Dimming percentage must be between 0 and 100"
 
-        # Add more basic validation as needed
+        # TODO: Add more basic validation as needed
         return True, None
 
     @staticmethod

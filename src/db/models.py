@@ -57,6 +57,7 @@ class ClientCredential(Base):
     __table_args__ = (
         UniqueConstraint('api_client_id', 'service_name', 'environment', name='uq_client_service_env'),
         Index('ix_client_credential_active', 'api_client_id', 'service_name', 'is_active'),
+        CheckConstraint("credential_type in ('api_token','oauth_token','certificate','other','base_url')", name="chk_credential_type"),
     )
 
 

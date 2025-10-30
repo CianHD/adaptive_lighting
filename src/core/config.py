@@ -24,10 +24,6 @@ class Settings(BaseSettings):
 
     # Application settings
     ENVIRONMENT: str = "development"
-    LOG_LEVEL: str = "INFO" # TODO: Are any of these used?
-    HOST: str = "0.0.0.0"
-    PORT: int = 8000
-    DEBUG: bool = True
 
     # Feature toggles
     REQUIRE_HMAC: bool = False

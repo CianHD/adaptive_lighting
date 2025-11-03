@@ -61,8 +61,7 @@ class AdminService:
         policy = Policy(
             project_id=project_id,
             version=request.version,
-            body=request.body,
-            active_from=datetime.now(timezone.utc)
+            body=request.body
         )
 
         db.add(policy)

@@ -2,8 +2,9 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 
-from src.db.models import Asset, Schedule, AuditLog
+from src.db.models import Asset, Schedule, AuditLog, Policy, RealtimeCommand
 from src.schemas.asset import AssetResponse, AssetStateResponse
+from src.schemas.command import RealtimeCommandRequest
 from src.services.exedra_service import ExedraService
 from src.services.credential_service import CredentialService
 
@@ -243,6 +244,7 @@ class AssetService:
         asset: Asset,
         schedule_steps: List[Dict[str, Any]],
         actor: str,
+        idempotency_key: Optional[str],
         db: Session
     ) -> str:
         """
@@ -252,6 +254,7 @@ class AssetService:
             asset: Asset to update schedule for
             schedule_steps: List of {"time": "HH:MM", "dim": 0-100} objects
             actor: Name of the actor making the change
+            idempotency_key: Optional idempotency key for duplicate prevention
             db: Database session
             
         Returns:
@@ -261,6 +264,16 @@ class AssetService:
             ValueError: If asset has no EXEDRA program ID configured
             RuntimeError: If EXEDRA API call fails
         """
+        # Check for duplicate request using idempotency key
+        if idempotency_key:
+            existing_schedule = db.query(Schedule).filter(
+                Schedule.asset_id == asset.asset_id,
+                Schedule.idempotency_key == idempotency_key
+            ).first()
+
+            if existing_schedule:
+                return str(existing_schedule.schedule_id)
+
         # Get EXEDRA program ID
         metadata = asset.asset_metadata or {}
         exedra_program_id = metadata.get("exedra_program_id")
@@ -301,7 +314,8 @@ class AssetService:
                     asset_id=asset.asset_id,
                     schedule={"steps": schedule_steps},
                     provider="exedra",
-                    status="active"
+                    status="active",
+                    idempotency_key=idempotency_key
                 )
 
                 # Mark any existing schedules as superseded
@@ -335,3 +349,146 @@ class AssetService:
         except Exception as e:
             db.rollback()
             raise RuntimeError(f"Failed to update EXEDRA schedule: {str(e)}") from e
+
+    # Realtime Command Methods
+
+    @staticmethod
+    def validate_basic_guardrails(asset: Asset, dim_percent: int) -> tuple[bool, Optional[str]]:
+        """
+        Apply basic guardrails (API hygiene level).
+        
+        Args:
+            asset: Asset to validate against
+            dim_percent: Dimming percentage to validate
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not 0 <= dim_percent <= 100:
+            return False, "Dimming percentage must be between 0 and 100"
+
+        # TODO: Add more basic validation as needed (rate limiting, etc.)
+        return True, None
+
+    @staticmethod
+    def validate_policy_guardrails(asset: Asset, dim_percent: int, db: Session) -> tuple[bool, Optional[str]]:
+        """
+        Apply policy-level guardrails (only in optimize mode).
+        
+        Args:
+            asset: Asset to validate against
+            dim_percent: Dimming percentage to validate
+            db: Database session
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if asset.control_mode != "optimise":
+            return True, None  # No policy guardrails in passthrough mode
+
+        current_policy = db.query(Policy).filter(Policy.project_id == asset.project_id).order_by(Policy.active_from.desc()).first()
+
+        if not current_policy:
+            return True, None  # No policy configured
+
+        policy_body = current_policy.body
+
+        # Check min/max constraints
+        min_dim = policy_body.get("min_dim", 0)
+        max_dim = policy_body.get("max_dim", 100)
+
+        if dim_percent < min_dim:
+            return False, f"Dimming below policy minimum: {min_dim}%"
+
+        if dim_percent > max_dim:
+            return False, f"Dimming above policy maximum: {max_dim}%"
+
+        # TODO: Add more policy checks:
+        # - Rate limiting (max_changes_per_hr)
+        # - Dwell time constraints
+        # - Time-of-night restrictions
+        # - Kill switch status
+
+        return True, None
+
+    @staticmethod
+    def create_realtime_command(
+        request: RealtimeCommandRequest,
+        asset: Asset,
+        api_client_id: str,
+        api_client_name: str,
+        idempotency_key: Optional[str],
+        db: Session
+    ) -> str:
+        """
+        Create a real-time dimming command.
+        
+        Args:
+            request: Command request details
+            asset: Target asset
+            api_client_id: ID of requesting API client
+            api_client_name: Name of requesting API client  
+            idempotency_key: Optional idempotency key
+            db: Database session
+            
+        Returns:
+            Created command ID
+            
+        Raises:
+            ValueError: If idempotency key already exists
+            
+        Note:
+            This is a skeleton implementation. For actual EXEDRA integration,
+            this should be expanded to use ExedraService similar to schedule updates.
+        """
+        # Check for existing command with same idempotency key
+        if idempotency_key:
+            existing_command = db.query(RealtimeCommand).filter(
+                RealtimeCommand.requested_by_api_client == api_client_id,
+                RealtimeCommand.idempotency_key == idempotency_key
+            ).first()
+
+            if existing_command:
+                # Return existing command ID for idempotent behavior
+                return existing_command.realtime_command_id
+
+        # Create command record
+        command = RealtimeCommand(
+            asset_id=asset.asset_id,
+            dim_percent=request.dim_percent,
+            source_mode=asset.control_mode,
+            vendor=api_client_name,
+            status="simulated",  # TODO: Implement actual EXEDRA integration
+            requested_by_api_client=api_client_id,
+            idempotency_key=idempotency_key
+        )
+
+        db.add(command)
+        db.flush()  # Get the ID
+
+        # Audit log
+        audit_entry = AuditLog(
+            actor="api",
+            project_id=asset.project_id,
+            action="realtime_command",
+            entity="asset",
+            entity_id=asset.asset_id,
+            details={
+                "asset_external_id": request.asset_external_id,
+                "dim_percent": request.dim_percent,
+                "control_mode": asset.control_mode,
+                "api_client": api_client_name,
+                "note": request.note,
+                "idempotency_key": idempotency_key
+            }
+        )
+        db.add(audit_entry)
+        db.commit()
+
+        # TODO: Implement actual EXEDRA integration similar to schedule updates:
+        # 1. Get EXEDRA configuration from CredentialService
+        # 2. Use ExedraService to send realtime command
+        # 3. Update command status based on success/failure
+        # 4. Handle errors appropriately
+
+        return command.realtime_command_id

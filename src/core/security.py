@@ -99,7 +99,6 @@ def authenticate_client(
     raw_key = credentials.credentials
 
     # Find matching API key in database
-    #TODO: In production I need to add an index on the hash prefix for performance
     api_keys = db.query(ApiKey).join(ApiClient).filter(
         ApiClient.project_id == project.project_id,
         ApiClient.status == "active"

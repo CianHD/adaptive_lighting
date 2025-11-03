@@ -40,6 +40,10 @@ class ApiKey(Base):
 
     api_client: Mapped[ApiClient] = relationship(back_populates="api_keys")
 
+    __table_args__ = (
+        Index("api_key_hash_prefix", "hash", postgresql_using="hash"),
+    )
+
 class ClientCredential(Base):
     __tablename__ = "client_credential"
     credential_id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, server_default=text("gen_random_uuid()"))
@@ -55,9 +59,10 @@ class ClientCredential(Base):
     api_client: Mapped[ApiClient] = relationship(back_populates="credentials")
 
     __table_args__ = (
-        UniqueConstraint('api_client_id', 'service_name', 'environment', name='uq_client_service_env'),
-        Index('ix_client_credential_active', 'api_client_id', 'service_name', 'is_active'),
-        CheckConstraint("credential_type in ('api_token','oauth_token','certificate','other','base_url')", name="chk_credential_type"),
+        UniqueConstraint('api_client_id', 'service_name', 'environment', name="client_credential_api_client_service_env_key"),
+        Index('client_credential_active', 'api_client_id', 'service_name', 'is_active'),
+        Index('client_credential_service', 'service_name', 'environment', postgresql_where=text('is_active = true')),
+        CheckConstraint("credential_type in ('api_token','oauth_token','certificate','other','base_url')", name="client_credential_credential_type_check"),
     )
 
 
@@ -85,8 +90,8 @@ class SensorType(Base):
     capabilities: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("manufacturer", "model", name="uq_sensor_type__manufacturer_model"),
-        Index("ix_sensor_type__capabilities_gin", "capabilities", postgresql_using="gin"),
+        UniqueConstraint("manufacturer", "model", name="sensor_type_manufacturer_model_key"),
+        Index("sensor_type_capabilities_gin", "capabilities", postgresql_using="gin"),  # GIN for array searches
     )
 
 class Asset(Base):
@@ -103,9 +108,9 @@ class Asset(Base):
     links: Mapped[list["SensorAssetLink"]] = relationship(back_populates="asset", cascade="all, delete-orphan")
 
     __table_args__ = (
-        UniqueConstraint("project_id", "external_id", name="uq_asset__project_external"),
-        CheckConstraint("control_mode in ('optimise','passthrough')", name="ck_asset__control_mode"),
-        Index("ix_asset__project", "project_id"),
+        UniqueConstraint("project_id", "external_id", name="asset_project_id_external_id_key"),
+        CheckConstraint("control_mode in ('optimise','passthrough')", name="asset_control_mode_check"),
+        Index("asset_project_id", "project_id"),
     )
 
 class Sensor(Base):
@@ -121,8 +126,8 @@ class Sensor(Base):
     links: Mapped[list["SensorAssetLink"]] = relationship(back_populates="sensor", cascade="all, delete-orphan")
 
     __table_args__ = (
-        UniqueConstraint("project_id", "external_id", name="uq_sensor__project_external"),
-        Index("ix_sensor__project", "project_id"),
+        UniqueConstraint("project_id", "external_id", name="sensor_project_id_external_id_key"),
+        Index("sensor_project_id", "project_id"),
     )
 
 class SensorAssetLink(Base):
@@ -136,8 +141,8 @@ class SensorAssetLink(Base):
     asset: Mapped[Asset] = relationship(back_populates="links")
 
     __table_args__ = (
-        UniqueConstraint("sensor_id", "asset_id", name="uq_sensor_asset_link__pair"),
-        Index("ix_sensor_asset_link__sensor_asset", "sensor_id", "asset_id"),
+        UniqueConstraint("sensor_id", "asset_id", name="sensor_asset_link_sensor_id_asset_id_key"),
+        Index("sensor_asset_link_sensor_asset", "sensor_id", "asset_id"),
     )
 
 
@@ -152,8 +157,8 @@ class VehicleReading(Base):
     source: Mapped[str | None] = mapped_column(String)
 
     __table_args__ = (
-        UniqueConstraint("sensor_id", "timestamp", name="uq_vehicle_reading__sensor_ts"),
-        Index("ix_vehicle_reading__sensor_ts", "sensor_id", "timestamp", postgresql_using=None),
+        UniqueConstraint("sensor_id", "timestamp", name="vehicle_reading_sensor_id_timestamp_key"),
+        Index("vehicle_reading_sensor_ts", "sensor_id", "timestamp", postgresql_using=None),
     )
 
 class PedReading(Base):
@@ -166,8 +171,8 @@ class PedReading(Base):
     source: Mapped[str | None] = mapped_column(String)
 
     __table_args__ = (
-        UniqueConstraint("sensor_id", "timestamp", name="uq_ped_reading__sensor_ts"),
-        Index("ix_ped_reading__sensor_ts", "sensor_id", "timestamp"),
+        UniqueConstraint("sensor_id", "timestamp", name="ped_reading_sensor_id_timestamp_key"),
+        Index("ped_reading_sensor_ts", "sensor_id", "timestamp"),
     )
 
 class SpeedReading(Base):
@@ -181,8 +186,8 @@ class SpeedReading(Base):
     source: Mapped[str | None] = mapped_column(String)
 
     __table_args__ = (
-        UniqueConstraint("sensor_id", "timestamp", name="uq_speed_reading__sensor_ts"),
-        Index("ix_speed_reading__sensor_ts", "sensor_id", "timestamp"),
+        UniqueConstraint("sensor_id", "timestamp", name="speed_reading_sensor_id_timestamp_key"),
+        Index("speed_reading_sensor_ts", "sensor_id", "timestamp"),
     )
 
 
@@ -196,27 +201,34 @@ class RealtimeCommand(Base):
     source_mode: Mapped[str] = mapped_column(String, nullable=False)  # optimise|passthrough
     vendor: Mapped[str | None] = mapped_column(String)
     algo_version: Mapped[str | None] = mapped_column(String)
-    status: Mapped[str] = mapped_column(String, nullable=False)       # simulated|sent|failed
+    status: Mapped[str] = mapped_column(String, nullable=False)  # simulated|sent|failed
     response: Mapped[dict | None] = mapped_column(JSONB)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     requested_by_api_client: Mapped[str | None] = mapped_column(ForeignKey("api_client.api_client_id"))
+    idempotency_key: Mapped[str | None] = mapped_column(String)  # For proper idempotency support
 
     __table_args__ = (
-        CheckConstraint("dim_percent BETWEEN 0 AND 100", name="ck_realtime_command__dim"),
-        Index("ix_realtime_cmd__asset_ts", "asset_id", "requested_at"),
+        CheckConstraint("dim_percent BETWEEN 0 AND 100", name="realtime_command_dim_percent_check"),
+        Index("realtime_cmd_asset_ts", "asset_id", "requested_at"),
+        UniqueConstraint("requested_by_api_client", "idempotency_key", name="realtime_command_client_idempotency_key"),
     )
 
 class Schedule(Base):
     __tablename__ = "schedule"
     schedule_id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, server_default=text("gen_random_uuid()"))
     asset_id: Mapped[str] = mapped_column(ForeignKey("asset.asset_id", ondelete="CASCADE"), nullable=False, index=True)
-    schedule: Mapped[dict] = mapped_column(JSONB, nullable=False)     # TALQ/CMS-shaped
-    provider: Mapped[str] = mapped_column(String, nullable=False)     # ours|vendor
+    exedra_control_program_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # EXEDRA system control program ID
+    schedule: Mapped[dict] = mapped_column(JSONB, nullable=False)  # TALQ/CMS-shaped
+    provider: Mapped[str] = mapped_column(String, nullable=False)  # ours|vendor
     created_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
-    status: Mapped[str] = mapped_column(String, nullable=False)       # active|superseded|failed
+    status: Mapped[str] = mapped_column(String, nullable=False)  # active|superseded|failed
+    idempotency_key: Mapped[str | None] = mapped_column(String)  # For schedule update idempotency
 
     __table_args__ = (
-        Index("ix_schedule__asset_created", "asset_id", "created_at"),
+        Index("schedule_asset_created", "asset_id", "created_at"),
+        Index("schedule_exedra_program_id", "exedra_control_program_id"),
+        Index("schedule_asset_id", "asset_id"),
+        UniqueConstraint("asset_id", "idempotency_key", name="schedule_asset_idempotency_key"),
     )
 
 class Policy(Base):
@@ -239,5 +251,7 @@ class AuditLog(Base):
     details: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
     __table_args__ = (
-        Index("ix_audit__project_ts", "project_id", "timestamp"),
+        Index("audit_project_ts", "project_id", "timestamp"),
+        Index("audit_log_entity_action", "entity", "action"),
+        Index("audit_log_timestamp_desc", "timestamp"),
     )

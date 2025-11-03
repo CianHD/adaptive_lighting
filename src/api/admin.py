@@ -2,6 +2,7 @@ from typing import Optional, List
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError, DatabaseError, SQLAlchemyError
 
 from src.core.security import AuthenticatedClient, require_scopes
 from src.db.session import get_db
@@ -214,6 +215,9 @@ async def store_exedra_config(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         ) from e
+    except (IntegrityError, DatabaseError, SQLAlchemyError):
+        # Let database errors flow through to global error handlers for proper status codes
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

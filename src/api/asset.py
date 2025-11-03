@@ -6,9 +6,8 @@ from sqlalchemy.orm import Session
 from src.core.security import AuthenticatedClient, require_scopes
 from src.db.session import get_db
 from src.services.asset_service import AssetService
-from src.services.command_service import CommandService
 from src.schemas.asset import AssetStateResponse, AssetResponse, AssetControlModeRequest, AssetControlModeResponse
-from src.schemas.command import ScheduleResponse, ScheduleStep, ScheduleCommandRequest, RealtimeCommandRequest, RealtimeCommandResponse
+from src.schemas.command import ScheduleResponse, ScheduleStep, ScheduleRequest, RealtimeCommandRequest, RealtimeCommandResponse
 
 router = APIRouter(prefix="/v1/{project_code}/asset", tags=["asset"])
 
@@ -161,8 +160,9 @@ async def get_asset_schedule(
 
 @router.put("/schedule", response_model=ScheduleResponse)
 async def update_asset_schedule(
-    request: ScheduleCommandRequest,
+    request: ScheduleRequest,
     asset_external_id: str = Query(..., description="External ID of the asset"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     client: AuthenticatedClient = Depends(require_scopes("asset:command")),
     db: Session = Depends(get_db)
 ):
@@ -203,6 +203,7 @@ async def update_asset_schedule(
             asset=asset,
             schedule_steps=schedule_steps,
             actor=client.api_client.name,
+            idempotency_key=idempotency_key,
             db=db
         )
 
@@ -240,7 +241,7 @@ async def realtime_command(
     """
 
     # Find the asset
-    asset = CommandService.get_asset_by_external_id(
+    asset = AssetService.get_asset_by_external_id(
         external_id=request.asset_external_id,
         project_id=client.project.project_id,
         db=db
@@ -253,7 +254,7 @@ async def realtime_command(
         )
 
     # Basic API hygiene validation
-    is_valid, error_msg = CommandService.validate_basic_guardrails(asset, request.dim_percent)
+    is_valid, error_msg = AssetService.validate_basic_guardrails(asset, request.dim_percent)
     if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -270,7 +271,7 @@ async def realtime_command(
             )
 
         # Apply policy guardrails
-        is_valid, error_msg = CommandService.validate_policy_guardrails(asset, request.dim_percent, db)
+        is_valid, error_msg = AssetService.validate_policy_guardrails(asset, request.dim_percent, db)
         if not is_valid:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -278,12 +279,11 @@ async def realtime_command(
             )
 
     # Create command using service
-    command = CommandService.create_realtime_command(
+    command_id = AssetService.create_realtime_command(
         request=request,
         asset=asset,
         api_client_id=client.api_client.api_client_id,
         api_client_name=client.api_client.name,
-        project_id=client.project.project_id,
         idempotency_key=idempotency_key,
         db=db
     )
@@ -291,7 +291,7 @@ async def realtime_command(
     status_msg = "accepted" if asset.control_mode == "passthrough" else "accepted_with_policy"
 
     return RealtimeCommandResponse(
-        command_id=command.realtime_command_id,
+        command_id=command_id,
         status=status_msg,
         message=f"Command queued for {asset.control_mode} mode relay",
         timestamp=datetime.now(timezone.utc)

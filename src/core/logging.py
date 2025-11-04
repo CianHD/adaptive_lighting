@@ -2,6 +2,7 @@ import logging
 import sys
 import time
 import json
+import requests
 from typing import Optional, Callable
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -58,8 +59,13 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
 
         # Log to stdout based on success/error
         if response.status_code >= 400:
-            # Log errors with details from response
-            error_details = await self._extract_error_details(response)
+            # Log errors with details - check for stored user-facing error first
+            error_details = None
+            if hasattr(request.state, 'user_facing_error'):
+                error_details = request.state.user_facing_error
+            else:
+                error_details = await self._extract_error_details(response)
+
             logger.error(
                 "Error %d on %s %s (%.3fs) [%s]: %s",
                 response.status_code,
@@ -133,13 +139,26 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
 
             # For audit purposes, we want the technical error details
             audit_error_details = None
+            user_response_error = None
+
             if not success:
-                if exception_details:
-                    # Use the original exception details (best for debugging)
+                # Get technical error details for audit purposes
+                if hasattr(request.state, 'original_exception_details'):
+                    audit_error_details = request.state.original_exception_details
+                elif exception_details:
+                    # Use the original exception details
                     audit_error_details = exception_details
                 else:
                     # Fall back to response body extraction
                     audit_error_details = await self._extract_error_details(response)
+
+                # Get the user-facing error message
+                user_response_error = None
+                if hasattr(request.state, 'user_facing_error'):
+                    user_response_error = request.state.user_facing_error
+                else:
+                    # Fall back to extracting from response body
+                    user_response_error = await self._extract_error_details(response)
 
             # Extract better actor information
             actor = 'anonymous'
@@ -191,7 +210,7 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
                     'duration_seconds': round(duration, 3),
                     'success': success,
                     'error_details': audit_error_details,
-                    'user_response_error': await self._extract_error_details(response) if not success else None,
+                    'user_response_error': user_response_error,
                     'user_agent': request.headers.get('user-agent'),
                     'remote_addr': request.client.host if request.client else None
                 }
@@ -207,7 +226,7 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
         except ImportError as e:
             # Handle cases where database modules aren't available
             logger.warning("Failed to log to audit table (import error): %s", str(e))
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             # Last resort - but log the specific error type for debugging
             logger.warning("Failed to log to audit table (unexpected error %s): %s", type(e).__name__, str(e))
 
@@ -224,6 +243,17 @@ def install_error_handlers(app: FastAPI):
     """
     @app.exception_handler(FastAPIHTTPException)
     async def http_exc_handler(request: Request, exc: FastAPIHTTPException):
+        # Store original exception details for audit logging
+        if not hasattr(request.state, 'original_exception_details'):
+            if exc.__cause__:
+                # Capture the underlying exception that caused the HTTPException
+                request.state.original_exception_details = f"{type(exc.__cause__).__name__}: {str(exc.__cause__)}"
+            else:
+                request.state.original_exception_details = f"HTTPException: {exc.detail}"
+
+        # Store user-facing error for audit logging
+        request.state.user_facing_error = exc.detail
+
         body = {
             "type": "about:blank",
             "title": "HTTP Error",
@@ -234,32 +264,86 @@ def install_error_handlers(app: FastAPI):
         return JSONResponse(body, status_code=exc.status_code, media_type="application/problem+json")
 
     @app.exception_handler(ValidationError)
-    async def validation_error_handler(request: Request, _exc: ValidationError):
+    async def validation_error_handler(request: Request, exc: ValidationError):
+        # Store original exception details for audit logging
+        request.state.original_exception_details = f"ValidationError: {str(exc)}"
+
+        # Store user-facing error for audit logging
+        user_message = "The request data failed validation. Please check your input."
+        request.state.user_facing_error = user_message
+
         body = {
             "type": "about:blank",
             "title": "Validation Error",
             "status": 422,
-            "detail": "The request data failed validation. Please check your input.",
+            "detail": user_message,
             "instance": str(request.url),
         }
         return JSONResponse(body, status_code=422, media_type="application/problem+json")
 
+    @app.exception_handler(ValueError)
+    async def value_error_handler(request: Request, exc: ValueError):
+        # Store both technical and user-facing details for audit logging
+        user_message = str(exc)
+        request.state.original_exception_details = f"ValueError: {user_message}"
+        request.state.user_facing_error = user_message
+
+        # For ValueError, the exception message is usually user-friendly
+        # so we can use it directly as the detail
+        body = {
+            "type": "about:blank",
+            "title": "Invalid Request",
+            "status": 400,
+            "detail": user_message,
+            "instance": str(request.url),
+        }
+        return JSONResponse(body, status_code=400, media_type="application/problem+json")
+
     @app.exception_handler(IntegrityError)
     async def integrity_error_handler(request: Request, exc: IntegrityError):
-        # Generic user-friendly error messages based on common constraint patterns
+        # Store original exception details for audit logging
+        request.state.original_exception_details = f"IntegrityError: {str(exc)}"
+
+        # User-friendly error messages based on actual database constraint patterns
         error_detail = "Database constraint violation. Please check your input."
         error_str = str(exc).lower()
 
-        if "chk_credential_type" in error_str:
-            error_detail = "Invalid credential type. Supported types: api_token, base_url, oauth_token, certificate, other"
-        elif "unique" in error_str or "duplicate" in error_str:
-            error_detail = "A record with these values already exists."
-        elif "foreign key" in error_str:
+        # Unique constraint violations (_key suffix)
+        if "_key" in error_str or "unique" in error_str:
+            if "client_credential_api_client_service_env_key" in error_str or "client_service_env" in error_str:
+                error_detail = "EXEDRA credentials already exist for this client and environment. Please use a different environment or update the existing credentials."
+            elif "sensor_id_timestamp_key" in error_str:
+                error_detail = "A reading already exists for this sensor at this timestamp."
+            elif "project_id_external_id_key" in error_str:
+                error_detail = "An asset or sensor with this external ID already exists in this project."
+            elif "manufacturer_model_key" in error_str:
+                error_detail = "A sensor type with this manufacturer and model already exists."
+            else:
+                error_detail = "A record with these values already exists."
+
+        # Check constraint violations (_check suffix)
+        elif "_check" in error_str or "check constraint" in error_str:
+            if "credential_type_check" in error_str:
+                error_detail = "Invalid credential type. Supported types: api_token, base_url, oauth_token, certificate, other"
+            elif "control_mode_check" in error_str:
+                error_detail = "Invalid control mode. Supported modes: optimise, passthrough"
+            elif "dim_percent_check" in error_str:
+                error_detail = "Dim percentage must be between 0 and 100"
+            elif "schedule_provider_check" in error_str:
+                error_detail = "Invalid schedule provider. Supported providers: ours, vendor, exedra"
+            else:
+                error_detail = "Data does not meet validation requirements."
+
+        # Foreign key constraint violations (_fkey suffix)
+        elif "_fkey" in error_str or "foreign key" in error_str:
             error_detail = "Referenced record does not exist."
+
+        # NOT NULL constraint violations (these don't use prefixes)
         elif "not null" in error_str:
             error_detail = "Required field is missing."
-        elif "check constraint" in error_str:
-            error_detail = "Data does not meet validation requirements."
+
+        # Store user-facing error for audit logging
+        request.state.user_facing_error = error_detail
 
         body = {
             "type": "about:blank",
@@ -270,35 +354,74 @@ def install_error_handlers(app: FastAPI):
         }
         return JSONResponse(body, status_code=400, media_type="application/problem+json")
 
+    @app.exception_handler(requests.RequestException)
+    async def request_exception_handler(request: Request, exc: requests.RequestException):
+        # Store original exception details for audit logging
+        request.state.original_exception_details = f"RequestException: {str(exc)}"
+
+        # Store user-facing error for audit logging
+        user_message = "External service unavailable. Please try again later."
+        request.state.user_facing_error = user_message
+
+        body = {
+            "type": "about:blank",
+            "title": "External Service Error",
+            "status": 503,
+            "detail": user_message,
+            "instance": str(request.url),
+        }
+        return JSONResponse(body, status_code=503, media_type="application/problem+json")
+
     @app.exception_handler(DatabaseError)
-    async def database_error_handler(request: Request, _exc: DatabaseError):
+    async def database_error_handler(request: Request, exc: DatabaseError):
+        # Store original exception details for audit logging
+        request.state.original_exception_details = f"DatabaseError: {str(exc)}"
+
+        # Store user-facing error for audit logging
+        user_message = "Database service temporarily unavailable. Please try again."
+        request.state.user_facing_error = user_message
+
         body = {
             "type": "about:blank",
             "title": "Database Error", 
             "status": 503,
-            "detail": "Database service temporarily unavailable. Please try again.",
+            "detail": user_message,
             "instance": str(request.url),
         }
         return JSONResponse(body, status_code=503, media_type="application/problem+json")
 
     @app.exception_handler(SQLAlchemyError)
-    async def sqlalchemy_error_handler(request: Request, _exc: SQLAlchemyError):
+    async def sqlalchemy_error_handler(request: Request, exc: SQLAlchemyError):
+        # Store original exception details for audit logging
+        request.state.original_exception_details = f"SQLAlchemyError: {str(exc)}"
+
+        # Store user-facing error for audit logging
+        user_message = "A database error occurred. Please try again or contact support."
+        request.state.user_facing_error = user_message
+
         body = {
             "type": "about:blank",
             "title": "Database Error",
             "status": 500, 
-            "detail": "A database error occurred. Please try again or contact support.",
+            "detail": user_message,
             "instance": str(request.url),
         }
         return JSONResponse(body, status_code=500, media_type="application/problem+json")
 
     @app.exception_handler(Exception)
-    async def general_exception_handler(request: Request, _exc: Exception):
+    async def general_exception_handler(request: Request, exc: Exception):
+        # Store original exception details for audit logging
+        request.state.original_exception_details = f"{type(exc).__name__}: {str(exc)}"
+
+        # Store user-facing error for audit logging
+        user_message = "An unexpected error occurred. Please try again or contact support."
+        request.state.user_facing_error = user_message
+
         body = {
             "type": "about:blank", 
             "title": "Internal Server Error",
             "status": 500,
-            "detail": "An unexpected error occurred. Please try again or contact support.",
+            "detail": user_message,
             "instance": str(request.url),
         }
         return JSONResponse(body, status_code=500, media_type="application/problem+json")

@@ -492,3 +492,89 @@ class AssetService:
         # 4. Handle errors appropriately
 
         return command.realtime_command_id
+
+    @staticmethod
+    def create_asset(
+        project_id: str,
+        external_id: str,
+        control_mode: str,
+        exedra_name: str,
+        exedra_control_program_id: str,
+        exedra_calendar_id: str,
+        actor: str,
+        db: Session
+    ) -> Asset:
+        """
+        Create a new asset with EXEDRA metadata and initial schedule record.
+        
+        Args:
+            project_id: Project ID for the asset
+            external_id: External ID of the asset (EXEDRA ID)
+            control_mode: Control mode (optimise|passthrough)
+            exedra_name: EXEDRA device name
+            exedra_control_program_id: EXEDRA control program ID
+            exedra_calendar_id: EXEDRA calendar ID
+            actor: Name of the actor creating the asset
+            db: Database session
+            
+        Returns:
+            Created Asset instance
+            
+        Raises:
+            ValueError: If asset already exists
+        """
+        # Check if asset already exists
+        existing_asset = db.query(Asset).filter(
+            Asset.project_id == project_id,
+            Asset.external_id == external_id
+        ).first()
+        if existing_asset:
+            raise ValueError(f"Asset with external_id '{external_id}' already exists in this project")
+
+        # Create asset metadata
+        asset_metadata = {
+            "exedra_control_program_id": exedra_control_program_id,
+            "exedra_calendar_id": exedra_calendar_id
+        }
+
+        # Create the asset
+        asset = Asset(
+            project_id=project_id,
+            external_id=external_id,
+            name=exedra_name,
+            control_mode=control_mode,
+            asset_metadata=asset_metadata
+        )
+
+        db.add(asset)
+        db.flush()  # Flush to get the asset_id
+
+        # Create initial schedule record with the control program ID and calendar ID
+        schedule = Schedule(
+            asset_id=asset.asset_id,
+            exedra_control_program_id=exedra_control_program_id,
+            exedra_calendar_id=exedra_calendar_id,
+            schedule={"steps": []},  # Empty schedule initially
+            provider="exedra",
+            status="active"
+        )
+        db.add(schedule)
+
+        # Create audit log
+        audit = AuditLog(
+            actor=actor,
+            action="create_asset",
+            entity="asset",
+            entity_id=str(asset.asset_id),
+            details={
+                "external_id": external_id,
+                "control_mode": control_mode,
+                "exedra_name": exedra_name,
+                "exedra_control_program_id": exedra_control_program_id,
+                "exedra_calendar_id": exedra_calendar_id
+            }
+        )
+        db.add(audit)
+        db.commit()
+
+        return asset

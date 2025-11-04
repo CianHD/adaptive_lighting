@@ -64,7 +64,7 @@ class ApiKeyRequest(BaseModel):
 class ApiKeyResponse(BaseModel):
     """Response for API key generation"""
     api_key_id: str
-    api_key: str  # The actual key - only returned once!
+    api_key: str
     api_client_id: str
     api_client_name: str
     scopes: List[str]

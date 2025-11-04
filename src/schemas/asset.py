@@ -28,3 +28,21 @@ class AssetControlModeResponse(BaseModel):
     control_mode: str
     changed_at: datetime
     changed_by: str
+
+class AssetCreateRequest(BaseModel):
+    """Request to create a new asset"""
+    exedra_id: str = Field(..., description="EXEDRA device ID (external_id)")
+    exedra_name: str = Field(..., description="EXEDRA device name")
+    exedra_control_program_id: str = Field(..., description="EXEDRA control program ID")
+    exedra_calendar_id: str = Field(..., description="EXEDRA calendar ID")
+    control_mode: str = Field(pattern=r"^(optimise|passthrough)$", description="Control mode for the asset")
+
+class AssetCreateResponse(BaseModel):
+    """Response for asset creation"""
+    asset_id: str
+    external_id: str
+    control_mode: str
+    exedra_name: str
+    exedra_control_program_id: str
+    exedra_calendar_id: str
+    created_at: datetime

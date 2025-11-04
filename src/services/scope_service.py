@@ -11,25 +11,29 @@ class ScopeService:
     SCOPE_DEFINITIONS = {
         # Asset Operations
         "asset:read": {
-            "description": "Read asset information, state, metadata, and schedules",
+            "description": "Read asset state and current operational status",
+            "category": "asset"
+        },
+        "asset:metadata": {
+            "description": "Read asset metadata, configuration details, and specifications",
             "category": "asset"
         },
         "asset:write": {
-            "description": "Update asset metadata, configuration, and control mode",
+            "description": "Create assets and update metadata, configuration, and control mode",
             "category": "asset"
         },
         "asset:command": {
             "description": "Execute asset commands (schedules and real-time dimming)",
             "category": "asset"
         },
-        "asset:override": {
-            "description": "Override asset policy constraints for optimise mode assets",
-            "category": "asset"
-        },
 
         # Sensor Operations
         "sensor:read": {
-            "description": "Read sensor information, capabilities, and metadata",
+            "description": "Read sensor operational status and current readings",
+            "category": "sensor"
+        },
+        "sensor:metadata": {
+            "description": "Read sensor metadata, configuration, and capabilities",
             "category": "sensor"
         },
         "sensor:write": {
@@ -54,27 +58,17 @@ class ScopeService:
             "description": "Enable/disable system kill switch",
             "category": "admin"
         },
-        "admin:audit:read": {
+        "admin:audit": {
             "description": "Read system audit logs",
             "category": "admin"
         },
-        "admin:credentials:write": {
+        "admin:credentials": {
             "description": "Store and manage client credentials (EXEDRA keys, etc.)",
             "category": "admin"
         },
         "admin:apikeys:write": {
             "description": "Generate and manage API keys for clients",
             "category": "admin"
-        },
-
-        # Metadata and Configuration
-        "metadata:read": {
-            "description": "Read system metadata and configuration catalogues",
-            "category": "metadata"
-        },
-        "config:write": {
-            "description": "Update system configuration and settings",
-            "category": "config"
         }
     }
 
@@ -176,49 +170,58 @@ class ScopeService:
         """Get recommended scope combinations for common use cases"""
         return {
             "asset_readonly": [
-                "asset:read",
-                "metadata:read"
+                "asset:read"
             ],
-            "asset_manager": [
+            "asset_metadata_viewer": [
                 "asset:read",
-                "asset:write",
-                "metadata:read",
-                "config:write"
+                "asset:metadata"
+            ],
+            "asset_administrator": [
+                "asset:read",
+                "asset:metadata",
+                "asset:write"
             ],
             "asset_operator": [
                 "asset:read",
-                "asset:command",
-                "metadata:read"
+                "asset:command"
             ],
             "asset_full_control": [
                 "asset:read",
+                "asset:metadata",
                 "asset:write", 
-                "asset:command",
-                "asset:override",
-                "metadata:read",
-                "config:write"
+                "asset:command"
             ],
             "sensor_client": [
                 "sensor:read",
-                "sensor:ingest",
-                "metadata:read"
+                "sensor:ingest"
+            ],
+            "sensor_metadata_viewer": [
+                "sensor:read",
+                "sensor:metadata"
+            ],
+            "sensor_administrator": [
+                "sensor:read",
+                "sensor:metadata",
+                "sensor:write",
+                "sensor:ingest"
             ],
             "system_admin": [
                 "admin:policy:read",
                 "admin:policy:write", 
                 "admin:killswitch",
-                "admin:audit:read",
-                "admin:credentials:write",
-                "admin:apikeys:write",
-                "metadata:read",
-                "config:write"
+                "admin:audit",
+                "admin:credentials",
+                "admin:apikeys:write"
             ],
             "integration_service": [
                 "asset:read",
                 "asset:command",
                 "sensor:read",
-                "sensor:ingest",
-                "metadata:read"
+                "sensor:ingest"
+            ],
+            "monitoring_service": [
+                "asset:read",
+                "sensor:read"
             ]
         }
 

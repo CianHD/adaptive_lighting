@@ -56,7 +56,7 @@ async def ingest_sensor_data(
 @router.get("/{external_id}", response_model=SensorResponse)
 async def get_sensor(
     external_id: str,
-    client: AuthenticatedClient = Depends(require_scopes("metadata:read")),
+    client: AuthenticatedClient = Depends(require_scopes("sensor:metadata")),
     db: Session = Depends(get_db)
 ):
     """Get sensor details by external ID"""

@@ -2,11 +2,12 @@ from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError, DatabaseError, SQLAlchemyError
 
 from src.core.security import AuthenticatedClient, require_scopes
 from src.db.session import get_db
 from src.services.asset_service import AssetService
-from src.schemas.asset import AssetStateResponse, AssetResponse, AssetControlModeRequest, AssetControlModeResponse
+from src.schemas.asset import AssetStateResponse, AssetResponse, AssetControlModeRequest, AssetControlModeResponse, AssetCreateRequest, AssetCreateResponse
 from src.schemas.command import ScheduleResponse, ScheduleStep, ScheduleRequest, RealtimeCommandRequest, RealtimeCommandResponse
 
 router = APIRouter(prefix="/v1/{project_code}/asset", tags=["asset"])
@@ -45,7 +46,7 @@ async def get_asset_state(
 @router.get("/{external_id}", response_model=AssetResponse)
 async def get_asset(
     external_id: str,
-    client: AuthenticatedClient = Depends(require_scopes("metadata:read")),
+    client: AuthenticatedClient = Depends(require_scopes("asset:metadata")),
     db: Session = Depends(get_db)
 ):
     """Get asset details by external ID"""
@@ -71,7 +72,7 @@ async def get_asset(
 async def update_asset_control_mode(
     external_id: str,
     request: AssetControlModeRequest,
-    client: AuthenticatedClient = Depends(require_scopes("config:write")),
+    client: AuthenticatedClient = Depends(require_scopes("asset:write")),
     db: Session = Depends(get_db)
 ):
     """
@@ -296,3 +297,54 @@ async def realtime_command(
         message=f"Command queued for {asset.control_mode} mode relay",
         timestamp=datetime.now(timezone.utc)
     )
+
+
+@router.post("/", response_model=AssetCreateResponse)
+async def create_asset(
+    request: AssetCreateRequest,
+    client: AuthenticatedClient = Depends(require_scopes("asset:write")),
+    db: Session = Depends(get_db)
+):
+    """
+    Create a new asset with EXEDRA integration.
+    
+    Creates an asset record with the provided EXEDRA ID as the external_id,
+    stores the EXEDRA device name in the name column, and initializes a 
+    schedule record with the provided control program and calendar IDs.
+    """
+    try:
+        asset = AssetService.create_asset(
+            project_id=client.project.project_id,
+            external_id=request.exedra_id,
+            control_mode=request.control_mode,
+            exedra_name=request.exedra_name,
+            exedra_control_program_id=request.exedra_control_program_id,
+            exedra_calendar_id=request.exedra_calendar_id,
+            actor=client.api_client.name,
+            db=db
+        )
+
+        return AssetCreateResponse(
+            asset_id=asset.asset_id,
+            external_id=asset.external_id,
+            control_mode=asset.control_mode,
+            exedra_name=asset.name,
+            exedra_control_program_id=asset.asset_metadata["exedra_control_program_id"],
+            exedra_calendar_id=asset.asset_metadata["exedra_calendar_id"],
+            created_at=asset.created_at
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        ) from e
+    except (IntegrityError, DatabaseError, SQLAlchemyError):
+        # Let the error handlers deal with database errors
+        # Don't wrap them in HTTPException to avoid exposing technical details
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create asset due to an unexpected error"
+        ) from e

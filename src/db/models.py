@@ -98,11 +98,12 @@ class Asset(Base):
     __tablename__ = "asset"
     asset_id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, server_default=text("gen_random_uuid()"))
     project_id: Mapped[str] = mapped_column(ForeignKey("project.project_id", ondelete="CASCADE"), nullable=False, index=True)
-    external_id: Mapped[str] = mapped_column(String, nullable=False)
+    external_id: Mapped[str] = mapped_column(String, nullable=False) # EXEDRA ID (not name)
     name: Mapped[str | None] = mapped_column(String)
     road_class: Mapped[str | None] = mapped_column(String)
     control_mode: Mapped[str] = mapped_column(String, nullable=False)  # 'optimise'|'passthrough'
     asset_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    created_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
 
     project: Mapped[Project] = relationship(back_populates="assets")
     links: Mapped[list["SensorAssetLink"]] = relationship(back_populates="asset", cascade="all, delete-orphan")
@@ -218,6 +219,7 @@ class Schedule(Base):
     schedule_id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, server_default=text("gen_random_uuid()"))
     asset_id: Mapped[str] = mapped_column(ForeignKey("asset.asset_id", ondelete="CASCADE"), nullable=False, index=True)
     exedra_control_program_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # EXEDRA system control program ID
+    exedra_calendar_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # EXEDRA system calendar ID
     schedule: Mapped[dict] = mapped_column(JSONB, nullable=False)  # TALQ/CMS-shaped
     provider: Mapped[str] = mapped_column(String, nullable=False)  # ours|vendor
     created_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
@@ -227,8 +229,10 @@ class Schedule(Base):
     __table_args__ = (
         Index("schedule_asset_created", "asset_id", "created_at"),
         Index("schedule_exedra_program_id", "exedra_control_program_id"),
+        Index("schedule_exedra_calendar_id", "exedra_calendar_id"),
         Index("schedule_asset_id", "asset_id"),
         UniqueConstraint("asset_id", "idempotency_key", name="schedule_asset_idempotency_key"),
+        CheckConstraint("provider in ('ours','vendor','exedra')", name="schedule_provider_check"),
     )
 
 class Policy(Base):

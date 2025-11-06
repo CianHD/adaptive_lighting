@@ -124,10 +124,17 @@ def authenticate_client(
             detail="Invalid API key"
         )
 
-    # Optional HMAC verification
+    # Optional HMAC verification - DISABLED for current implementation
+    # Client has opted out of certificate management for initial deployment
     if x_signature and x_timestamp:
-        # You'd implement HMAC verification here using a shared secret
-        # This is a placeholder for the HMAC verification logic
+    #     # HMAC verification would be implemented here using a shared secret
+    #     # Reference implementation for future clients requiring enhanced security:
+    #     # 1. Extract signature from x_signature header
+    #     # 2. Get shared secret from client configuration
+    #     # 3. Reconstruct payload using request body + timestamp
+    #     # 4. Calculate HMAC-SHA256 signature
+    #     # 5. Compare signatures using secure comparison
+    #     # 6. Validate timestamp is within acceptable window (e.g., 5 minutes)
         pass
 
     # Update last used timestamp

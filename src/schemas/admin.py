@@ -70,6 +70,11 @@ class ApiKeyResponse(BaseModel):
     scopes: List[str]
     created_at: datetime
 
+class CurrentApiKeyResponse(BaseModel):
+    """Response for current API key information"""
+    api_client_name: str
+    scopes: List[str]
+
 # Scope management
 class ScopeInfo(BaseModel):
     """Information about a scope"""
@@ -81,4 +86,3 @@ class ScopeListResponse(BaseModel):
     """Response for scope catalogue listing"""
     scopes: List[ScopeInfo]
     recommended_combinations: Dict[str, List[str]]
-    current_key_scopes: List[str]  # Scopes active for the current API key

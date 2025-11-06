@@ -1,58 +1,28 @@
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Header, status
+from fastapi import APIRouter, Depends, HTTPException, Header, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, DatabaseError, SQLAlchemyError
 
 from src.core.security import AuthenticatedClient, require_scopes
 from src.db.session import get_db
 from src.services.asset_service import AssetService
-from src.schemas.asset import AssetStateResponse, AssetResponse, AssetControlModeRequest, AssetControlModeResponse, AssetCreateRequest, AssetCreateResponse
+from src.schemas.asset import AssetStateResponse, AssetResponse, AssetControlModeRequest, AssetControlModeResponse, AssetCreateRequest, AssetCreateResponse, AssetUpdateRequest, AssetUpdateResponse
 from src.schemas.command import ScheduleResponse, ScheduleStep, ScheduleRequest, RealtimeCommandRequest, RealtimeCommandResponse
 
 router = APIRouter(prefix="/v1/{project_code}/asset", tags=["asset"])
 
 
-@router.get("/state", response_model=AssetStateResponse)
-async def get_asset_state(
-    asset_external_id: str = Query(..., description="External ID of the asset"),
-    client: AuthenticatedClient = Depends(require_scopes("asset:read")),
-    db: Session = Depends(get_db)
-):
-    """
-    Get current state of an asset including dimming level and active schedule.
-    
-    This is a validation endpoint for checking asset state.
-    """
-
-    # Find the asset
-    asset = AssetService.get_asset_by_external_id(
-        external_id=asset_external_id,
-        project_id=client.project.project_id,
-        db=db
-    )
-
-    if not asset:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Asset {asset_external_id} not found"
-        )
-
-    # Get asset state using service
-    asset_state = AssetService.get_asset_state(asset=asset, db=db)
-    return asset_state
-
-
-@router.get("/{external_id}", response_model=AssetResponse)
+@router.get("/{exedra_id}", response_model=AssetResponse)
 async def get_asset(
-    external_id: str,
+    exedra_id: str,
     client: AuthenticatedClient = Depends(require_scopes("asset:metadata")),
     db: Session = Depends(get_db)
 ):
-    """Get asset details by external ID"""
+    """Get asset details by EXEDRA device ID"""
 
     asset = AssetService.get_asset_by_external_id(
-        external_id=external_id,
+        external_id=exedra_id,
         project_id=client.project.project_id,
         db=db
     )
@@ -60,7 +30,7 @@ async def get_asset(
     if not asset:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Asset {external_id} not found"
+            detail=f"Asset {exedra_id} not found"
         )
 
     # Get asset details using service
@@ -68,52 +38,166 @@ async def get_asset(
     return asset_response
 
 
-@router.put("/mode/{external_id}", response_model=AssetControlModeResponse)
-async def update_asset_control_mode(
-    external_id: str,
-    request: AssetControlModeRequest,
-    client: AuthenticatedClient = Depends(require_scopes("asset:write")),
+@router.post("/", response_model=AssetCreateResponse)
+async def create_asset(
+    request: AssetCreateRequest,
+    client: AuthenticatedClient = Depends(require_scopes("asset:create")),
     db: Session = Depends(get_db)
 ):
     """
-    Change asset control mode between 'optimise' and 'passthrough'.
+    Create a new asset with EXEDRA integration.
     
-    This is an operations endpoint with immediate effect on subsequent commands.
+    Creates an asset record with the provided EXEDRA ID as the external_id,
+    stores the EXEDRA device name in the name column, and initializes a 
+    schedule record with the provided control program and calendar IDs.
     """
-
-    # Find the asset
-    asset = AssetService.get_asset_by_external_id(
-        external_id=external_id,
-        project_id=client.project.project_id,
-        db=db
-    )
-
-    if not asset:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Asset {external_id} not found"
+    try:
+        asset = AssetService.create_asset(
+            project_id=client.project.project_id,
+            external_id=request.exedra_id,
+            control_mode=request.control_mode,
+            exedra_name=request.exedra_name,
+            exedra_control_program_id=request.exedra_control_program_id,
+            exedra_calendar_id=request.exedra_calendar_id,
+            actor=client.api_client.name,
+            db=db
         )
 
-    # Update control mode using service
-    updated_asset = AssetService.update_control_mode(
-        asset=asset,
-        new_mode=request.control_mode,
-        api_client_name=client.api_client.name,
-        project_id=client.project.project_id,
-        db=db
-    )
+        return AssetCreateResponse(
+            asset_id=asset.asset_id,
+            exedra_id=asset.external_id,
+            control_mode=asset.control_mode,
+            exedra_name=asset.name,
+            exedra_control_program_id=asset.asset_metadata["exedra_control_program_id"],
+            exedra_calendar_id=asset.asset_metadata["exedra_calendar_id"],
+            created_at=asset.created_at
+        )
 
-    return AssetControlModeResponse(
-        asset_external_id=external_id,
-        control_mode=updated_asset.control_mode,
-        changed_at=datetime.now(timezone.utc),
-        changed_by=client.api_client.name
-    )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        ) from e
+    except RuntimeError as e:
+        # Service layer database errors - don't expose technical details
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create asset due to a system error"
+        ) from e
+    except (IntegrityError, DatabaseError, SQLAlchemyError):
+        # Let the error handlers deal with database errors
+        # Don't wrap them in HTTPException to avoid exposing technical details
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create asset due to an unexpected error"
+        ) from e
 
 
-@router.get("/schedule", response_model=ScheduleResponse)
+@router.put("/{exedra_id}", response_model=AssetUpdateResponse)
+async def update_asset(
+    exedra_id: str,
+    request: AssetUpdateRequest,
+    client: AuthenticatedClient = Depends(require_scopes("asset:update")),
+    db: Session = Depends(get_db)
+):
+    """
+    Update an asset's details.
+    
+    Updates EXEDRA device information and metadata. The exedra_id (EXEDRA device ID)
+    cannot be changed as it's the immutable identifier for the device.
+    """
+    try:
+        asset = AssetService.update_asset(
+            external_id=exedra_id,
+            project_id=client.project.project_id,
+            exedra_name=request.exedra_name,
+            exedra_control_program_id=request.exedra_control_program_id,
+            exedra_calendar_id=request.exedra_calendar_id,
+            metadata=request.metadata,
+            actor=client.api_client.name,
+            db=db
+        )
+
+        return AssetUpdateResponse(
+            asset_id=asset.asset_id,
+            exedra_id=asset.external_id,
+            exedra_name=asset.name,
+            exedra_control_program_id=asset.asset_metadata.get("exedra_control_program_id"),
+            exedra_calendar_id=asset.asset_metadata.get("exedra_calendar_id"),
+            metadata=asset.asset_metadata,
+            updated_at=asset.updated_at
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        ) from e
+    except RuntimeError as e:
+        # Service layer database errors - don't expose technical details
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update asset due to a system error"
+        ) from e
+    except (IntegrityError, DatabaseError, SQLAlchemyError):
+        # Let the error handlers deal with database errors
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update asset due to an unexpected error"
+        ) from e
+
+
+@router.delete("/{exedra_id}")
+async def delete_asset(
+    exedra_id: str,
+    client: AuthenticatedClient = Depends(require_scopes("asset:delete")),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete an asset and its associated data.
+    
+    Removes the asset from the system along with all related records.
+    This action cannot be undone.
+    """
+    try:
+        AssetService.delete_asset(
+            external_id=exedra_id,
+            project_id=client.project.project_id,
+            actor=client.api_client.name,
+            db=db
+        )
+
+        return {"message": f"Asset {exedra_id} deleted successfully"}
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        ) from e
+    except RuntimeError as e:
+        # Service layer database errors - don't expose technical details
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete asset due to a system error"
+        ) from e
+    except (IntegrityError, DatabaseError, SQLAlchemyError):
+        # Let the error handlers deal with database errors
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete asset due to an unexpected error"
+        ) from e
+
+
+# Asset Schedule Endpoints
+@router.get("/schedule/{exedra_id}", response_model=ScheduleResponse)
 async def get_asset_schedule(
-    asset_external_id: str = Query(..., description="External ID of the asset"),
+    exedra_id: str,
     client: AuthenticatedClient = Depends(require_scopes("asset:read")),
     db: Session = Depends(get_db)
 ):
@@ -126,7 +210,7 @@ async def get_asset_schedule(
     """
     # Find the asset
     asset = AssetService.get_asset_by_external_id(
-        external_id=asset_external_id,
+        external_id=exedra_id,
         project_id=client.project.project_id,
         db=db
     )
@@ -134,7 +218,7 @@ async def get_asset_schedule(
     if not asset:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Asset {asset_external_id} not found"
+            detail=f"Asset {exedra_id} not found"
         )
 
     try:
@@ -159,10 +243,10 @@ async def get_asset_schedule(
         ) from e
 
 
-@router.put("/schedule", response_model=ScheduleResponse)
+@router.put("/schedule/{exedra_id}", response_model=ScheduleResponse)
 async def update_asset_schedule(
+    exedra_id: str,
     request: ScheduleRequest,
-    asset_external_id: str = Query(..., description="External ID of the asset"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     client: AuthenticatedClient = Depends(require_scopes("asset:command")),
     db: Session = Depends(get_db)
@@ -177,7 +261,7 @@ async def update_asset_schedule(
     """
     # Find the asset
     asset = AssetService.get_asset_by_external_id(
-        external_id=asset_external_id,
+        external_id=exedra_id,
         project_id=client.project.project_id,
         db=db
     )
@@ -185,14 +269,7 @@ async def update_asset_schedule(
     if not asset:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Asset {asset_external_id} not found"
-        )
-
-    # Validate that the request asset_external_id matches the query parameter
-    if request.asset_external_id != asset_external_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Asset external ID in request body must match query parameter"
+            detail=f"Asset {exedra_id} not found"
         )
 
     try:
@@ -226,8 +303,40 @@ async def update_asset_schedule(
         ) from e
 
 
-@router.post("/realtime", response_model=RealtimeCommandResponse)
+# Asset State Endpoints
+@router.get("/state/{exedra_id}", response_model=AssetStateResponse)
+async def get_asset_state(
+    exedra_id: str,
+    client: AuthenticatedClient = Depends(require_scopes("asset:read")),
+    db: Session = Depends(get_db)
+):
+    """
+    Get current state of an asset including dimming level and active schedule.
+    
+    This is a validation endpoint for checking asset state by EXEDRA device ID.
+    """
+
+    # Find the asset
+    asset = AssetService.get_asset_by_external_id(
+        external_id=exedra_id,
+        project_id=client.project.project_id,
+        db=db
+    )
+
+    if not asset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Asset {exedra_id} not found"
+        )
+
+    # Get asset state using service
+    asset_state = AssetService.get_asset_state(asset=asset, db=db)
+    return asset_state
+
+
+@router.post("/realtime/{exedra_id}", response_model=RealtimeCommandResponse)
 async def realtime_command(
+    exedra_id: str,
     request: RealtimeCommandRequest,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     client: AuthenticatedClient = Depends(require_scopes("asset:command")),
@@ -243,7 +352,7 @@ async def realtime_command(
 
     # Find the asset
     asset = AssetService.get_asset_by_external_id(
-        external_id=request.asset_external_id,
+        external_id=exedra_id,
         project_id=client.project.project_id,
         db=db
     )
@@ -251,7 +360,7 @@ async def realtime_command(
     if not asset:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Asset {request.asset_external_id} not found"
+            detail=f"Asset {exedra_id} not found"
         )
 
     # Basic API hygiene validation
@@ -299,52 +408,45 @@ async def realtime_command(
     )
 
 
-@router.post("/", response_model=AssetCreateResponse)
-async def create_asset(
-    request: AssetCreateRequest,
-    client: AuthenticatedClient = Depends(require_scopes("asset:write")),
+# Asset Control Endpoints
+@router.put("/mode/{exedra_id}", response_model=AssetControlModeResponse)
+async def update_asset_control_mode(
+    exedra_id: str,
+    request: AssetControlModeRequest,
+    client: AuthenticatedClient = Depends(require_scopes("asset:update")),
     db: Session = Depends(get_db)
 ):
     """
-    Create a new asset with EXEDRA integration.
+    Change asset control mode between 'optimise' and 'passthrough'.
     
-    Creates an asset record with the provided EXEDRA ID as the external_id,
-    stores the EXEDRA device name in the name column, and initializes a 
-    schedule record with the provided control program and calendar IDs.
+    This is an operations endpoint with immediate effect on subsequent commands.
     """
-    try:
-        asset = AssetService.create_asset(
-            project_id=client.project.project_id,
-            external_id=request.exedra_id,
-            control_mode=request.control_mode,
-            exedra_name=request.exedra_name,
-            exedra_control_program_id=request.exedra_control_program_id,
-            exedra_calendar_id=request.exedra_calendar_id,
-            actor=client.api_client.name,
-            db=db
+
+    # Find the asset
+    asset = AssetService.get_asset_by_external_id(
+        external_id=exedra_id,
+        project_id=client.project.project_id,
+        db=db
+    )
+
+    if not asset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Asset {exedra_id} not found"
         )
 
-        return AssetCreateResponse(
-            asset_id=asset.asset_id,
-            external_id=asset.external_id,
-            control_mode=asset.control_mode,
-            exedra_name=asset.name,
-            exedra_control_program_id=asset.asset_metadata["exedra_control_program_id"],
-            exedra_calendar_id=asset.asset_metadata["exedra_calendar_id"],
-            created_at=asset.created_at
-        )
+    # Update control mode using service
+    updated_asset = AssetService.update_control_mode(
+        asset=asset,
+        new_mode=request.control_mode,
+        api_client_name=client.api_client.name,
+        project_id=client.project.project_id,
+        db=db
+    )
 
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        ) from e
-    except (IntegrityError, DatabaseError, SQLAlchemyError):
-        # Let the error handlers deal with database errors
-        # Don't wrap them in HTTPException to avoid exposing technical details
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create asset due to an unexpected error"
-        ) from e
+    return AssetControlModeResponse(
+        exedra_id=exedra_id,
+        control_mode=updated_asset.control_mode,
+        changed_at=datetime.now(timezone.utc),
+        changed_by=client.api_client.name
+    )

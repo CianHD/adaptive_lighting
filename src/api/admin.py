@@ -8,19 +8,19 @@ from src.core.security import AuthenticatedClient, require_scopes
 from src.db.session import get_db
 from src.services.admin_service import AdminService
 from src.services.scope_service import ScopeService
-from src.schemas.admin import PolicyRequest, PolicyResponse, KillSwitchRequest, KillSwitchResponse, AuditLogResponse, ExedraConfigRequest, ExedraConfigResponse, ApiKeyRequest, ApiKeyResponse, ScopeListResponse, ScopeInfo
+from src.schemas.admin import PolicyRequest, PolicyResponse, KillSwitchRequest, KillSwitchResponse, AuditLogResponse, ExedraConfigRequest, ExedraConfigResponse, ApiKeyRequest, ApiKeyResponse, CurrentApiKeyResponse, ScopeListResponse, ScopeInfo
 
 router = APIRouter(prefix="/v1/{project_code}/admin", tags=["admin"])
 
 
 @router.post("/policy", response_model=PolicyResponse)
-async def update_policy(
+async def create_policy(
     request: PolicyRequest,
-    client: AuthenticatedClient = Depends(require_scopes("admin:policy:write")),
+    client: AuthenticatedClient = Depends(require_scopes("admin:policy:create")),
     db: Session = Depends(get_db)
 ):
     """
-    Update the system policy configuration.
+    Create a new system policy configuration.
     
     Policy controls dimming limits, rate limits, and other operational parameters.
     Only one policy can be active at a time. Previous policies are archived.
@@ -28,6 +28,47 @@ async def update_policy(
 
     try:
         policy = AdminService.create_policy(
+            request=request,
+            project_id=client.project.project_id,
+            api_client_name=client.api_client.name,
+            db=db
+        )
+
+        return PolicyResponse(
+            policy_id=str(policy.policy_id),
+            version=policy.version,
+            body=policy.body,
+            active_from=policy.active_from
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        ) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create policy"
+        ) from e
+
+
+@router.put("/policy/{policy_id}", response_model=PolicyResponse)
+async def update_policy(
+    policy_id: str,
+    request: PolicyRequest,
+    client: AuthenticatedClient = Depends(require_scopes("admin:policy:update")),
+    db: Session = Depends(get_db)
+):
+    """
+    Update an existing system policy configuration.
+    
+    Updates the specified policy while maintaining version history.
+    """
+
+    try:
+        policy = AdminService.update_policy(
+            policy_id=policy_id,
             request=request,
             project_id=client.project.project_id,
             api_client_name=client.api_client.name,
@@ -120,7 +161,7 @@ async def toggle_kill_switch(
 
 @router.get("/kill-switch", response_model=KillSwitchResponse)
 async def get_kill_switch_status(
-    client: AuthenticatedClient = Depends(require_scopes("admin:policy:read")),
+    client: AuthenticatedClient = Depends(require_scopes("admin:killswitch")),
     db: Session = Depends(get_db)
 ):
     """
@@ -146,7 +187,7 @@ async def get_kill_switch_status(
 async def get_audit_logs(
     limit: Optional[int] = Query(100, description="Maximum number of logs to return", ge=1, le=1000),
     offset: Optional[int] = Query(0, description="Number of logs to skip", ge=0),
-    client: AuthenticatedClient = Depends(require_scopes("admin:audit:read")),
+    client: AuthenticatedClient = Depends(require_scopes("admin:audit")),
     db: Session = Depends(get_db)
 ):
     """
@@ -181,7 +222,7 @@ async def get_audit_logs(
 @router.post("/exedra-config", response_model=ExedraConfigResponse)
 async def store_exedra_config(
     request: ExedraConfigRequest,
-    client: AuthenticatedClient = Depends(require_scopes("admin:credentials:write")),
+    client: AuthenticatedClient = Depends(require_scopes("admin:credentials")),
     db: Session = Depends(get_db)
 ):
     """
@@ -225,10 +266,33 @@ async def store_exedra_config(
         ) from e
 
 
+@router.get("/api-key", response_model=CurrentApiKeyResponse)
+async def get_current_api_key(
+    client: AuthenticatedClient = Depends(require_scopes("admin:apikey:read")),
+    _db: Session = Depends(get_db)
+):
+    """
+    Get current API key information and permissions.
+    
+    Returns the client name and scopes for the API key being used to make this request.
+    """
+    try:
+        return CurrentApiKeyResponse(
+            api_client_name=client.api_client.name,
+            scopes=client.scopes
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve API key information"
+        ) from e
+
+
 @router.post("/api-key", response_model=ApiKeyResponse)
 async def generate_api_key(
     request: ApiKeyRequest,
-    client: AuthenticatedClient = Depends(require_scopes("admin:apikeys:write")),
+    client: AuthenticatedClient = Depends(require_scopes("admin:apikey:create")),
     db: Session = Depends(get_db)
 ):
     """
@@ -280,18 +344,95 @@ async def generate_api_key(
         ) from e
 
 
-@router.get("/scopes", response_model=ScopeListResponse)
-async def list_available_scopes(
-    client: AuthenticatedClient = Depends(require_scopes("admin:apikeys:write")),
+@router.put("/api-key/{api_key_id}", response_model=ApiKeyResponse)
+async def update_api_key(
+    api_key_id: str,
+    request: ApiKeyRequest,
+    client: AuthenticatedClient = Depends(require_scopes("admin:apikey:update")),
     db: Session = Depends(get_db)
 ):
     """
-    List all available API scopes, recommended combinations, and current key's active scopes.
+    Update an existing API key's scopes and details.
+    
+    This endpoint allows administrators to modify API key permissions.
+    The original API key value remains unchanged.
+    """
+    try:
+        # Update the API key
+        updated_key = AdminService.update_api_key(
+            api_key_id=api_key_id,
+            scopes=request.scopes,
+            project_id=client.project.project_id,
+            api_client_name=client.api_client.name,
+            db=db
+        )
+
+        return ApiKeyResponse(
+            api_key_id=updated_key.api_key_id,
+            api_key="[HIDDEN]",  # Don't return the actual key value
+            api_client_id=updated_key.api_client_id,
+            api_client_name=updated_key.api_client.name,
+            scopes=updated_key.scopes,
+            created_at=updated_key.created_at
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        ) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update API key"
+        ) from e
+
+
+@router.delete("/api-key/{api_key_id}")
+async def delete_api_key(
+    api_key_id: str,
+    client: AuthenticatedClient = Depends(require_scopes("admin:apikey:delete")),
+    db: Session = Depends(get_db)
+):
+    """
+    Revoke and delete an API key.
+    
+    This endpoint permanently removes an API key, making it invalid for further use.
+    This action cannot be undone.
+    """
+    try:
+        AdminService.delete_api_key(
+            api_key_id=api_key_id,
+            project_id=client.project.project_id,
+            api_client_name=client.api_client.name,
+            db=db
+        )
+
+        return {"message": f"API key {api_key_id} deleted successfully"}
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        ) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete API key"
+        ) from e
+
+
+@router.get("/scopes", response_model=ScopeListResponse)
+async def list_available_scopes(
+    _client: AuthenticatedClient = Depends(require_scopes("admin:apikey:read")),
+    db: Session = Depends(get_db)
+):
+    """
+    List all available API scopes and recommended combinations.
     
     This endpoint provides the complete catalogue of available scopes
     for API key generation, along with recommended scope combinations
-    for common use cases, and shows which scopes are active for the
-    current API key making the request.
+    for common use cases.
     """
     try:
         # Get scopes from database (single source of truth)
@@ -309,8 +450,7 @@ async def list_available_scopes(
 
         return ScopeListResponse(
             scopes=scope_list,
-            recommended_combinations=recommended,
-            current_key_scopes=client.scopes
+            recommended_combinations=recommended
         )
 
     except Exception as e:
@@ -322,7 +462,7 @@ async def list_available_scopes(
 
 @router.post("/scopes/sync")
 async def sync_scope_catalogue(
-    client: AuthenticatedClient = Depends(require_scopes("admin:apikeys:write")),
+    client: AuthenticatedClient = Depends(require_scopes("admin:apikey:update")),
     db: Session = Depends(get_db)
 ):
     """

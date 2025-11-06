@@ -1,6 +1,6 @@
-from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError, DatabaseError, SQLAlchemyError
 
 from src.db.models import Asset, Schedule, AuditLog, Policy, RealtimeCommand
 from src.schemas.asset import AssetResponse, AssetStateResponse
@@ -63,10 +63,10 @@ class AssetService:
         # This would typically come from EXEDRA's live status endpoint
 
         return AssetStateResponse(
-            asset_external_id=asset.external_id,
+            exedra_id=asset.external_id,
             current_dim_percent=current_dim,
             current_schedule_id=current_schedule_id,
-            updated_at=datetime.now(timezone.utc)
+            updated_at=asset.updated_at
         )
 
     @staticmethod
@@ -81,7 +81,7 @@ class AssetService:
             AssetResponse with asset details
         """
         return AssetResponse(
-            external_id=asset.external_id,
+            exedra_id=asset.external_id,
             name=asset.name,
             control_mode=asset.control_mode,
             road_class=asset.road_class,
@@ -228,7 +228,7 @@ class AssetService:
                         )
                         db.add(schedule)
                         db.commit()
-                except Exception as sync_error:
+                except (IntegrityError, DatabaseError, SQLAlchemyError) as sync_error:
                     # Don't fail the main operation if audit sync fails
                     print(f"Warning: Failed to sync schedule to local DB: {sync_error}")
                     if db:
@@ -236,7 +236,7 @@ class AssetService:
 
             return schedule_data
 
-        except Exception as e:
+        except (ValueError, RuntimeError, ConnectionError, TimeoutError) as e:
             raise RuntimeError(f"Failed to retrieve EXEDRA schedule: {str(e)}") from e
 
     @staticmethod
@@ -346,14 +346,17 @@ class AssetService:
             else:
                 raise RuntimeError("EXEDRA update failed")
 
-        except Exception as e:
+        except (IntegrityError, DatabaseError, SQLAlchemyError) as db_error:
             db.rollback()
-            raise RuntimeError(f"Failed to update EXEDRA schedule: {str(e)}") from e
+            raise RuntimeError(f"Database error during EXEDRA schedule update: {str(db_error)}") from db_error
+        except (ValueError, RuntimeError, ConnectionError, TimeoutError) as api_error:
+            db.rollback()
+            raise RuntimeError(f"EXEDRA API error during schedule update: {str(api_error)}") from api_error
 
     # Realtime Command Methods
 
     @staticmethod
-    def validate_basic_guardrails(asset: Asset, dim_percent: int) -> tuple[bool, Optional[str]]:
+    def validate_basic_guardrails(_asset: Asset, dim_percent: int) -> tuple[bool, Optional[str]]:
         """
         Apply basic guardrails (API hygiene level).
         
@@ -367,7 +370,9 @@ class AssetService:
         if not 0 <= dim_percent <= 100:
             return False, "Dimming percentage must be between 0 and 100"
 
-        # TODO: Add more basic validation as needed (rate limiting, etc.)
+        # TODO: Implement actual rate limiting with Redis/database tracking (e.g., 1000/hr)
+        # For now, this is a placeholder for future rate limiting logic
+
         return True, None
 
     @staticmethod
@@ -403,11 +408,13 @@ class AssetService:
         if dim_percent > max_dim:
             return False, f"Dimming above policy maximum: {max_dim}%"
 
-        # TODO: Add more policy checks:
-        # - Rate limiting (max_changes_per_hr)
-        # - Dwell time constraints
-        # - Time-of-night restrictions
-        # - Kill switch status
+        # TODO: Add more policy checks for future adaptive_service.py (optimise mode):
+        # - Rate limiting (max_changes_per_hr) - implemented in adaptive service
+        # - Dwell time constraints - prevent rapid cycling
+        # - Time-of-night restrictions - reduce late night changes
+        # - Kill switch status - emergency override capability
+        # - Environmental data integration - weather/occupancy consideration
+        # These will be implemented when developing the 'optimise' control mode
 
         return True, None
 
@@ -474,7 +481,7 @@ class AssetService:
             entity="asset",
             entity_id=asset.asset_id,
             details={
-                "asset_external_id": request.asset_external_id,
+                "asset_external_id": asset.external_id,
                 "dim_percent": request.dim_percent,
                 "control_mode": asset.control_mode,
                 "api_client": api_client_name,
@@ -578,3 +585,164 @@ class AssetService:
         db.commit()
 
         return asset
+
+    @staticmethod
+    def update_asset(
+        external_id: str,
+        project_id: str,
+        exedra_name: Optional[str] = None,
+        exedra_control_program_id: Optional[str] = None,
+        exedra_calendar_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        actor: str = "unknown",
+        db: Session = None
+    ) -> Asset:
+        """
+        Update an asset's details (excludes external_id which is immutable).
+        
+        Args:
+            external_id: The asset's external ID (immutable identifier)
+            project_id: Project ID for tenant isolation
+            exedra_name: Updated EXEDRA device name
+            exedra_control_program_id: Updated EXEDRA control program ID
+            exedra_calendar_id: Updated EXEDRA calendar ID
+            metadata: Updated metadata (merged with existing)
+            actor: Who is performing the update
+            db: Database session
+            
+        Returns:
+            Updated Asset object
+            
+        Raises:
+            ValueError: If asset not found or no updates provided
+        """
+        # Get existing asset
+        asset = db.query(Asset).filter(
+            Asset.project_id == project_id,
+            Asset.external_id == external_id
+        ).first()
+
+        if not asset:
+            raise ValueError(f"Asset with external_id '{external_id}' not found in this project")
+
+        # Check if any updates are provided
+        if not any([exedra_name, exedra_control_program_id, exedra_calendar_id, metadata]):
+            raise ValueError("At least one field must be provided for update")
+
+        # Update asset fields
+        if exedra_name is not None:
+            asset.name = exedra_name
+
+        # Update metadata - merge with existing
+        if metadata is not None:
+            current_metadata = asset.asset_metadata or {}
+
+            # Update EXEDRA fields in metadata
+            if exedra_control_program_id is not None:
+                current_metadata["exedra_control_program_id"] = exedra_control_program_id
+            if exedra_calendar_id is not None:
+                current_metadata["exedra_calendar_id"] = exedra_calendar_id
+
+            # Merge additional metadata
+            current_metadata.update(metadata)
+            asset.asset_metadata = current_metadata
+        else:
+            # Update EXEDRA fields even if no additional metadata provided
+            current_metadata = asset.asset_metadata or {}
+            if exedra_control_program_id is not None:
+                current_metadata["exedra_control_program_id"] = exedra_control_program_id
+            if exedra_calendar_id is not None:
+                current_metadata["exedra_calendar_id"] = exedra_calendar_id
+            asset.asset_metadata = current_metadata
+
+        # Note: updated_at will be handled by database trigger or default value
+        # No need to manually set timestamp
+
+        try:
+            db.commit()
+            db.refresh(asset)
+
+            # Log the update
+            audit_entry = AuditLog(
+                actor=actor,
+                project_id=project_id,
+                action="update_asset",
+                entity="asset",
+                entity_id=asset.asset_id,
+                details={
+                    "external_id": external_id,
+                    "updated_fields": {
+                        "exedra_name": exedra_name,
+                        "exedra_control_program_id": exedra_control_program_id,
+                        "exedra_calendar_id": exedra_calendar_id,
+                        "metadata_updated": metadata is not None
+                    }
+                }
+            )
+            db.add(audit_entry)
+            db.commit()
+
+        except (IntegrityError, DatabaseError, SQLAlchemyError) as e:
+            db.rollback()
+            raise RuntimeError(f"Database error during asset update: {str(e)}") from e
+
+        return asset
+
+    @staticmethod
+    def delete_asset(
+        external_id: str,
+        project_id: str,
+        actor: str = "unknown",
+        db: Session = None
+    ) -> bool:
+        """
+        Delete an asset and its associated data.
+        
+        Args:
+            external_id: The asset's external ID
+            project_id: Project ID for tenant isolation
+            actor: Who is performing the deletion
+            db: Database session
+            
+        Returns:
+            True if deletion was successful
+            
+        Raises:
+            ValueError: If asset not found
+        """
+        # Get existing asset
+        asset = db.query(Asset).filter(
+            Asset.project_id == project_id,
+            Asset.external_id == external_id
+        ).first()
+
+        if not asset:
+            raise ValueError(f"Asset with external_id '{external_id}' not found in this project")
+
+        asset_id = asset.asset_id
+
+        try:
+            # Log the deletion before actually deleting
+            audit_entry = AuditLog(
+                actor=actor,
+                project_id=project_id,
+                action="delete_asset",
+                entity="asset",
+                entity_id=asset_id,
+                details={
+                    "external_id": external_id,
+                    "asset_name": asset.name,
+                    "control_mode": asset.control_mode
+                }
+            )
+            db.add(audit_entry)
+
+            # Delete the asset (cascade will handle related records)
+            db.delete(asset)
+            db.commit()
+
+        except (IntegrityError, DatabaseError, SQLAlchemyError) as e:
+            db.rollback()
+            raise RuntimeError(f"Database error during asset deletion: {str(e)}") from e
+
+        return True

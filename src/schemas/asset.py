@@ -5,14 +5,14 @@ from datetime import datetime
 # Asset state schemas
 class AssetStateResponse(BaseModel):
     """Current state of an asset"""
-    asset_external_id: str
+    exedra_id: str
     current_dim_percent: Optional[int] = Field(None, ge=0, le=100)
     current_schedule_id: Optional[str] = None
     updated_at: datetime
 
 class AssetResponse(BaseModel):
     """Asset details response"""
-    external_id: str
+    exedra_id: str
     name: Optional[str] = None
     control_mode: str  # "optimise" | "passthrough"
     road_class: Optional[str] = None
@@ -24,7 +24,7 @@ class AssetControlModeRequest(BaseModel):
 
 class AssetControlModeResponse(BaseModel):
     """Response for control mode change"""
-    asset_external_id: str
+    exedra_id: str
     control_mode: str
     changed_at: datetime
     changed_by: str
@@ -40,9 +40,26 @@ class AssetCreateRequest(BaseModel):
 class AssetCreateResponse(BaseModel):
     """Response for asset creation"""
     asset_id: str
-    external_id: str
+    exedra_id: str
     control_mode: str
     exedra_name: str
     exedra_control_program_id: str
     exedra_calendar_id: str
     created_at: datetime
+
+class AssetUpdateRequest(BaseModel):
+    """Request to update an asset (excludes external_id which is immutable and control_mode which is a separate endpoint)"""
+    exedra_name: Optional[str] = Field(None, description="EXEDRA device name")
+    exedra_control_program_id: Optional[str] = Field(None, description="EXEDRA control program ID")
+    exedra_calendar_id: Optional[str] = Field(None, description="EXEDRA calendar ID")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional asset metadata")
+
+class AssetUpdateResponse(BaseModel):
+    """Response for asset update"""
+    asset_id: str
+    exedra_id: str
+    exedra_name: str
+    exedra_control_program_id: str
+    exedra_calendar_id: str
+    metadata: Dict[str, Any]
+    updated_at: datetime

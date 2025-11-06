@@ -104,6 +104,7 @@ class Asset(Base):
     control_mode: Mapped[str] = mapped_column(String, nullable=False)  # 'optimise'|'passthrough'
     asset_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     created_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
+    updated_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
 
     project: Mapped[Project] = relationship(back_populates="assets")
     links: Mapped[list["SensorAssetLink"]] = relationship(back_populates="asset", cascade="all, delete-orphan")
@@ -121,6 +122,8 @@ class Sensor(Base):
     external_id: Mapped[str] = mapped_column(String, nullable=False)
     sensor_type_id: Mapped[str] = mapped_column(ForeignKey("sensor_type.sensor_type_id"), nullable=False)
     sensor_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    created_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
+    updated_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
 
     project: Mapped[Project] = relationship(back_populates="sensors")
     sensor_type: Mapped[SensorType] = relationship()

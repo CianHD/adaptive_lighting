@@ -5,7 +5,6 @@ from datetime import datetime
 # Realtime command schemas
 class RealtimeCommandRequest(BaseModel):
     """Request to set immediate dimming level"""
-    asset_external_id: str
     sensor_external_id: Optional[str] = None
     dim_percent: int = Field(ge=0, le=100)
     note: Optional[str] = None
@@ -25,7 +24,6 @@ class ScheduleStep(BaseModel):
 
 class ScheduleRequest(BaseModel):
     """Request to set a lighting schedule"""
-    asset_external_id: str
     steps: List[ScheduleStep]
     note: Optional[str] = None
 

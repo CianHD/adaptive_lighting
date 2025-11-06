@@ -18,8 +18,16 @@ class ScopeService:
             "description": "Read asset metadata, configuration details, and specifications",
             "category": "asset"
         },
-        "asset:write": {
-            "description": "Create assets and update metadata, configuration, and control mode",
+        "asset:create": {
+            "description": "Create new assets",
+            "category": "asset"
+        },
+        "asset:update": {
+            "description": "Update asset metadata, configuration, and control mode",
+            "category": "asset"
+        },
+        "asset:delete": {
+            "description": "Delete assets and their associated data",
             "category": "asset"
         },
         "asset:command": {
@@ -36,12 +44,34 @@ class ScopeService:
             "description": "Read sensor metadata, configuration, and capabilities",
             "category": "sensor"
         },
-        "sensor:write": {
-            "description": "Update sensor configuration and metadata",
+        "sensor:create": {
+            "description": "Create new sensors and sensor-to-asset links",
+            "category": "sensor"
+        },
+        "sensor:update": {
+            "description": "Update sensor configuration, metadata, and asset links",
+            "category": "sensor"
+        },
+        "sensor:delete": {
+            "description": "Delete sensors and their associated data",
             "category": "sensor"
         },
         "sensor:ingest": {
             "description": "Submit sensor data readings",
+            "category": "sensor"
+        },
+
+        # Sensor Type Operations
+        "sensor:type:create": {
+            "description": "Create new sensor types",
+            "category": "sensor"
+        },
+        "sensor:type:update": {
+            "description": "Update sensor type details and capabilities",
+            "category": "sensor"
+        },
+        "sensor:type:delete": {
+            "description": "Delete sensor types",
             "category": "sensor"
         },
 
@@ -50,8 +80,12 @@ class ScopeService:
             "description": "Read system policy configurations",
             "category": "admin"
         },
-        "admin:policy:write": {
-            "description": "Create and update system policies",
+        "admin:policy:create": {
+            "description": "Create new system policies",
+            "category": "admin"
+        },
+        "admin:policy:update": {
+            "description": "Update existing system policies",
             "category": "admin"
         },
         "admin:killswitch": {
@@ -66,8 +100,20 @@ class ScopeService:
             "description": "Store and manage client credentials (EXEDRA keys, etc.)",
             "category": "admin"
         },
-        "admin:apikeys:write": {
-            "description": "Generate and manage API keys for clients",
+        "admin:apikey:read": {
+            "description": "Read API keys and available scopes",
+            "category": "admin"
+        },
+        "admin:apikey:create": {
+            "description": "Generate new API keys for clients",
+            "category": "admin"
+        },
+        "admin:apikey:update": {
+            "description": "Update API key details and scopes",
+            "category": "admin"
+        },
+        "admin:apikey:delete": {
+            "description": "Revoke and delete API keys",
             "category": "admin"
         }
     }
@@ -176,10 +222,17 @@ class ScopeService:
                 "asset:read",
                 "asset:metadata"
             ],
+            "asset_creator": [
+                "asset:read",
+                "asset:metadata",
+                "asset:create"
+            ],
             "asset_administrator": [
                 "asset:read",
                 "asset:metadata",
-                "asset:write"
+                "asset:create",
+                "asset:update",
+                "asset:delete"
             ],
             "asset_operator": [
                 "asset:read",
@@ -188,7 +241,9 @@ class ScopeService:
             "asset_full_control": [
                 "asset:read",
                 "asset:metadata",
-                "asset:write", 
+                "asset:create",
+                "asset:update",
+                "asset:delete",
                 "asset:command"
             ],
             "sensor_client": [
@@ -199,11 +254,24 @@ class ScopeService:
                 "sensor:read",
                 "sensor:metadata"
             ],
+            "sensor_creator": [
+                "sensor:read",
+                "sensor:metadata",
+                "sensor:create"
+            ],
             "sensor_administrator": [
                 "sensor:read",
                 "sensor:metadata",
-                "sensor:write",
+                "sensor:create",
+                "sensor:update",
+                "sensor:delete",
                 "sensor:ingest"
+            ],
+            "sensor_type_manager": [
+                "sensor:metadata",
+                "sensor:type:create",
+                "sensor:type:update",
+                "sensor:type:delete"
             ],
             "system_admin": [
                 "admin:policy:read",

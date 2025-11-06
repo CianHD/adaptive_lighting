@@ -62,7 +62,7 @@ class CredentialService:
                 ClientCredential.api_client_id == api_client_id,
                 ClientCredential.service_name == service_name,
                 ClientCredential.environment == environment,
-                ClientCredential.is_active == True
+                ClientCredential.is_active
             )
         ).all()
 
@@ -111,7 +111,7 @@ class CredentialService:
                 ClientCredential.service_name == service_name,
                 ClientCredential.credential_type == credential_type,
                 ClientCredential.environment == environment,
-                ClientCredential.is_active == True
+                ClientCredential.is_active
             )
         ).first()
 

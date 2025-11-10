@@ -1,0 +1,50 @@
+version: 1.0
+runtime: docker
+build:
+  commands:
+    build:
+      - echo "Building Adaptive Lighting API for AWS App Runner"
+      - docker build -t adaptive-lighting-api .
+run:
+  runtime-version: latest
+  command: python src/server.py
+  network:
+    port: 8000
+    env:
+      - name: ENVIRONMENT
+        value: "production"
+      - name: AWS_SECRET_NAME
+        value: "adaptive-lighting/production"
+      - name: AWS_REGION
+        value: "ap-southeast-2"
+      - name: HOST
+        value: "0.0.0.0"
+      - name: PORT
+        value: "8000"
+      - name: LOG_LEVEL
+        value: "INFO"
+      - name: WORKERS
+        value: "1"
+      - name: TIMEOUT_KEEP_ALIVE
+        value: "65"
+      - name: TIMEOUT_GRACEFUL_SHUTDOWN
+        value: "30"
+      - name: MAX_REQUESTS
+        value: "1000"
+      - name: MAX_REQUESTS_JITTER
+        value: "100"
+  instances:
+    cpu: 1024  # 1 vCPU
+    memory: 2048  # 2 GB RAM
+  auto-scaling:
+    min-size: 1
+    max-size: 3
+    target-cpu: 70
+    target-memory: 80
+  health-check:
+    path: "/health"
+    interval: 30
+    timeout: 5
+    healthy-threshold: 2
+    unhealthy-threshold: 5
+    startup-grace-period: 60

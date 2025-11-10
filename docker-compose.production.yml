@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  # Production API service (for App Runner)
+  adaptive-lighting-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - HOST=0.0.0.0
+      - PORT=8000
+      - WORKERS=1  # Single worker for App Runner/containers
+      # Production optimizations (matching server.py)
+      - TIMEOUT_KEEP_ALIVE=65
+      - TIMEOUT_GRACEFUL_SHUTDOWN=30
+      - MAX_REQUESTS=1000
+      - MAX_REQUESTS_JITTER=100
+    env_file:
+      - .env.production  # Production secrets
+    networks:
+      - adaptive-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  adaptive-network:
+    driver: bridge

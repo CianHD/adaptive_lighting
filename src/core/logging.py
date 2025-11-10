@@ -2,6 +2,7 @@ import logging
 import sys
 import time
 import json
+import os
 import requests
 from typing import Optional, Callable
 from fastapi import FastAPI, Request, Response
@@ -15,9 +16,16 @@ from pydantic import ValidationError
 from src.db.session import get_db
 from src.db.models import AuditLog, Project
 
-# Basic logging setup
-LOG_LEVEL = logging.INFO
-logging.basicConfig(stream=sys.stdout, level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+# Container-optimized logging setup
+LOG_LEVEL = getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper())
+
+# Simple, consistent logging format for all environments
+logging.basicConfig(
+    stream=sys.stdout,
+    level=LOG_LEVEL,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s"
+)
+
 logger = logging.getLogger("adaptive")
 
 

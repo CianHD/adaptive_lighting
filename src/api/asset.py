@@ -450,3 +450,85 @@ async def update_asset_control_mode(
         changed_at=datetime.now(timezone.utc),
         changed_by=client.api_client.name
     )
+
+
+@router.post("/commission/{exedra_id}")
+async def commission_asset(
+    exedra_id: str,
+    client: AuthenticatedClient = Depends(require_scopes("asset:command")),
+    db: Session = Depends(get_db)
+):
+    """
+    Manually trigger commissioning for an asset with pending commission status.
+    
+    This endpoint attempts to commission an asset that has a schedule in 
+    'pending_commission' status. Useful for manual retries or debugging.
+    """
+    asset = AssetService.get_asset_by_external_id(
+        external_id=exedra_id,
+        project_id=client.project.project_id,
+        db=db
+    )
+
+    if not asset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Asset {exedra_id} not found"
+        )
+
+    try:
+        success = AssetService.commission_asset(
+            asset=asset,
+            actor=f"manual_{client.api_client.name}",
+            db=db
+        )
+
+        if success:
+            return {
+                "status": "success",
+                "message": f"Asset {exedra_id} commissioned successfully",
+                "timestamp": datetime.now(timezone.utc)
+            }
+        else:
+            return {
+                "status": "failed",
+                "message": f"Asset {exedra_id} commissioning failed or max retries exceeded",
+                "timestamp": datetime.now(timezone.utc)
+            }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        ) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Commissioning error: {str(e)}"
+        ) from e
+
+
+@router.post("/process-pending-commissions")
+async def process_pending_commissions(
+    _client: AuthenticatedClient = Depends(require_scopes("admin:system")),
+    db: Session = Depends(get_db)
+):
+    """
+    Background task endpoint to process all pending commissions.
+    
+    This endpoint processes all assets with pending commission status
+    across all projects. Intended for scheduled background processing.
+    Requires admin privileges.
+    """
+    try:
+        await AssetService.process_pending_commissions(db=db, max_concurrent=10)
+        return {
+            "status": "success",
+            "message": "Pending commissions processing started",
+            "timestamp": datetime.now(timezone.utc)
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process pending commissions: {str(e)}"
+        ) from e

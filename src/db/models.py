@@ -226,7 +226,10 @@ class Schedule(Base):
     schedule: Mapped[dict] = mapped_column(JSONB, nullable=False)  # TALQ/CMS-shaped
     provider: Mapped[str] = mapped_column(String, nullable=False)  # ours|vendor
     created_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
-    status: Mapped[str] = mapped_column(String, nullable=False)  # active|superseded|failed
+    status: Mapped[str] = mapped_column(String, nullable=False)  # active|superseded|failed|pending_commission
+    commission_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # Number of commission attempts
+    last_commission_attempt: Mapped["datetime | None"] = mapped_column(DateTime(timezone=True), nullable=True)  # Last attempt timestamp, updated by service
+    commission_error: Mapped[str | None] = mapped_column(Text, nullable=True)  # Last commission error message
     idempotency_key: Mapped[str | None] = mapped_column(String)  # For schedule update idempotency
 
     __table_args__ = (
@@ -234,8 +237,14 @@ class Schedule(Base):
         Index("schedule_exedra_program_id", "exedra_control_program_id"),
         Index("schedule_exedra_calendar_id", "exedra_calendar_id"),
         Index("schedule_asset_id", "asset_id"),
+        Index("schedule_commission_retry", "status", "last_commission_attempt"),  # For retry processing
+        Index("schedule_commission_retry_pending", "status", "last_commission_attempt", postgresql_where=text("status = 'pending_commission'")),  # Pending commissions
+        Index("schedule_commission_attempts", "commission_attempts", postgresql_where=text("commission_attempts > 0")),  # Monitor attempts
+        Index("schedule_commission_status_attempts", "status", "commission_attempts", "last_commission_attempt"),  # Composite for processing
+        Index("schedule_commission_failed", "asset_id", "status", "commission_attempts", postgresql_where=text("status = 'failed' AND commission_attempts >= 3")),  # Failed commissions
         UniqueConstraint("asset_id", "idempotency_key", name="schedule_asset_idempotency_key"),
         CheckConstraint("provider in ('ours','vendor','exedra')", name="schedule_provider_check"),
+        CheckConstraint("status in ('active','superseded','failed','pending_commission')", name="schedule_status_check"),
     )
 
 class Policy(Base):

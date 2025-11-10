@@ -1,3 +1,5 @@
+import asyncio
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, DatabaseError, SQLAlchemyError
@@ -7,6 +9,7 @@ from src.schemas.asset import AssetResponse, AssetStateResponse
 from src.schemas.command import RealtimeCommandRequest
 from src.services.exedra_service import ExedraService
 from src.services.credential_service import CredentialService
+from src.services.email_service import EmailService
 
 
 class AssetService:
@@ -55,12 +58,26 @@ class AssetService:
             ).order_by(Schedule.created_at.desc()).first()
             current_schedule_id = current_schedule.schedule_id if current_schedule else None
 
-        # In a real implementation, you'd query the actual asset state from EXEDRA
-        # For now, we'll use placeholder data
-        current_dim = None
-
-        # TODO: Query real-time asset status from EXEDRA
-        # This would typically come from EXEDRA's live status endpoint
+        # Query real-time asset status from EXEDRA
+        current_dim = None  # Default fallback value
+        try:
+            # Get API client configuration
+            api_client = asset.project.api_clients[0] if asset.project.api_clients else None
+            if api_client:
+                exedra_config = CredentialService.get_exedra_config(api_client, db)
+                if exedra_config.get("token") and exedra_config.get("base_url"):
+                    # Get current dimming level from EXEDRA
+                    dimming_data = ExedraService.get_device_dimming_level(
+                        device_id=asset.external_id,
+                        token=exedra_config["token"],
+                        base_url=exedra_config["base_url"],
+                        refresh_device=False  # Can be made configurable
+                    )
+                    # Extract level from EXEDRA response
+                    current_dim = dimming_data.get("level") or dimming_data.get("dimmingLevel")
+        except (ValueError, RuntimeError):
+            # Fall back to local data on any EXEDRA connectivity issues
+            pass
 
         return AssetStateResponse(
             exedra_id=asset.external_id,
@@ -228,9 +245,8 @@ class AssetService:
                         )
                         db.add(schedule)
                         db.commit()
-                except (IntegrityError, DatabaseError, SQLAlchemyError) as sync_error:
+                except (IntegrityError, DatabaseError, SQLAlchemyError):
                     # Don't fail the main operation if audit sync fails
-                    print(f"Warning: Failed to sync schedule to local DB: {sync_error}")
                     if db:
                         db.rollback()
 
@@ -309,12 +325,18 @@ class AssetService:
             )
 
             if success:
-                # Create schedule record in our database
+                # Schedule updated successfully - create pending commission record
+                schedule_status = "pending_commission"
+
+                # Create schedule record in our database with retry tracking
                 schedule = Schedule(
                     asset_id=asset.asset_id,
                     schedule={"steps": schedule_steps},
                     provider="exedra",
-                    status="active",
+                    status=schedule_status,
+                    commission_attempts=0,
+                    last_commission_attempt=None,
+                    commission_error=None,
                     idempotency_key=idempotency_key
                 )
 
@@ -336,11 +358,17 @@ class AssetService:
                         "asset_external_id": asset.external_id,
                         "schedule_steps": schedule_steps,
                         "exedra_program_id": exedra_program_id,
-                        "provider": "exedra"
+                        "provider": "exedra",
+                        "schedule_status": schedule_status,
+                        "note": "Commissioning deferred to background job due to typical multi-minute duration"
                     }
                 )
                 db.add(audit)
                 db.commit()
+
+                # Trigger background commissioning (fire-and-forget)
+                # This runs immediately but doesn't block the API response
+                asyncio.create_task(AssetService._commission_single_asset(asset, actor, db))
 
                 return schedule.schedule_id
             else:
@@ -352,6 +380,173 @@ class AssetService:
         except (ValueError, RuntimeError, ConnectionError, TimeoutError) as api_error:
             db.rollback()
             raise RuntimeError(f"EXEDRA API error during schedule update: {str(api_error)}") from api_error
+
+    @staticmethod
+    def commission_asset(
+        asset: Asset,
+        actor: str,
+        db: Session,
+        timeout: float = 180.0
+    ) -> bool:
+        """
+        Commission an asset with automatic retry logic (for schedules in 'pending_commission' status)
+        
+        Args:
+            asset: Asset to commission
+            actor: Name of the actor performing commissioning
+            db: Database session
+            timeout: Commissioning timeout (default 180s for 3-minute attempts)
+            
+        Returns:
+            True if commissioning succeeded, False if max retries exceeded
+            
+        Raises:
+            ValueError: If asset has no pending commission schedule
+        """
+        # Find pending commission schedule
+        pending_schedule = db.query(Schedule).filter(
+            Schedule.asset_id == asset.asset_id,
+            Schedule.status == "pending_commission"
+        ).order_by(Schedule.created_at.desc()).first()
+
+        if not pending_schedule:
+            raise ValueError(f"Asset {asset.external_id} has no pending commission schedule")
+
+        # Check if max retries exceeded
+        max_attempts = 3
+        if pending_schedule.commission_attempts >= max_attempts:
+            # Send failure notification email
+            EmailService.send_commission_failure_alert(asset, pending_schedule, db)
+            return False
+
+        # Check if we need to wait between attempts (30 seconds)
+        if pending_schedule.last_commission_attempt:
+            time_since_last = datetime.now(timezone.utc) - pending_schedule.last_commission_attempt
+            if time_since_last < timedelta(seconds=30):
+                # Too soon for retry
+                return False
+
+        # Get EXEDRA configuration
+        api_client = asset.project.api_clients[0] if asset.project.api_clients else None
+        if not api_client:
+            raise ValueError(f"No API client found for asset {asset.external_id}")
+
+        exedra_config = CredentialService.get_exedra_config(api_client, db)
+        if not exedra_config.get("token") or not exedra_config.get("base_url"):
+            raise ValueError(f"No EXEDRA credentials found for asset {asset.external_id}")
+
+        # Update attempt tracking before attempting
+        pending_schedule.commission_attempts += 1
+        pending_schedule.last_commission_attempt = datetime.now(timezone.utc)
+
+        try:
+            # Attempt commissioning with 3-minute timeout
+            commission_result = ExedraService.commission_device(
+                device_id=asset.external_id,
+                token=exedra_config["token"],
+                base_url=exedra_config["base_url"],
+                timeout=timeout
+            )
+
+            # Success: Update schedule status to active
+            pending_schedule.status = "active"
+            pending_schedule.commission_error = None  # Clear any previous error
+
+            # Create audit log for successful commissioning
+            audit = AuditLog(
+                actor=actor,
+                action="commission_asset",
+                entity="asset",
+                entity_id=str(asset.asset_id),
+                details={
+                    "asset_external_id": asset.external_id,
+                    "schedule_id": pending_schedule.schedule_id,
+                    "commissioning_success": True,
+                    "commission_result": commission_result,
+                    "attempt_number": pending_schedule.commission_attempts,
+                    "timeout_used": timeout
+                }
+            )
+            db.add(audit)
+            db.commit()
+
+            return True
+
+        except (ValueError, RuntimeError) as commission_error:
+            # Store the error for tracking
+            pending_schedule.commission_error = str(commission_error)
+
+            # Create audit log for failed commissioning
+            audit = AuditLog(
+                actor=actor,
+                action="commission_asset",
+                entity="asset",
+                entity_id=str(asset.asset_id),
+                details={
+                    "asset_external_id": asset.external_id,
+                    "schedule_id": pending_schedule.schedule_id,
+                    "commissioning_success": False,
+                    "commission_error": str(commission_error),
+                    "attempt_number": pending_schedule.commission_attempts,
+                    "max_attempts": max_attempts,
+                    "timeout_used": timeout
+                }
+            )
+            db.add(audit)
+
+            # If this was the final attempt, send failure email
+            if pending_schedule.commission_attempts >= max_attempts:
+                pending_schedule.status = "failed"
+                EmailService.send_commission_failure_alert(asset, pending_schedule, db)
+
+            db.commit()
+            return False
+
+    # Background Commissioning Integration
+
+    @staticmethod
+    async def process_pending_commissions(db: Session, max_concurrent: int = 5):
+        """
+        Process all pending commissions with retry logic
+        
+        Args:
+            db: Database session
+            max_concurrent: Maximum concurrent commission attempts
+        """
+        # Find schedules that need commissioning and are ready for retry
+        ready_for_retry = datetime.now(timezone.utc) - timedelta(seconds=30)
+
+        pending_schedules = db.query(Schedule).filter(
+            Schedule.status == "pending_commission",
+            Schedule.commission_attempts < 3,
+            # Either never attempted, or last attempt was > 30 seconds ago
+            (Schedule.last_commission_attempt.is_(None)) |
+            (Schedule.last_commission_attempt <= ready_for_retry)
+        ).limit(max_concurrent).all()
+
+        # Process each schedule
+        tasks = []
+        for schedule in pending_schedules:
+            asset = db.query(Asset).filter(Asset.asset_id == schedule.asset_id).first()
+            if asset:
+                task = AssetService._commission_single_asset(asset, "background_processor", db)
+                tasks.append(task)
+
+        # Wait for all commissioning attempts to complete
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    @staticmethod
+    async def _commission_single_asset(asset: Asset, actor: str, db: Session):
+        """
+        Commission a single asset in background (async wrapper)
+        """
+        try:
+            AssetService.commission_asset(asset, actor, db)
+        except (ValueError, RuntimeError, DatabaseError, SQLAlchemyError):
+            # Errors are already handled in commission_asset method
+            # This wrapper ensures background processing doesn't crash
+            pass
 
     # Realtime Command Methods
 
@@ -391,7 +586,8 @@ class AssetService:
         if asset.control_mode != "optimise":
             return True, None  # No policy guardrails in passthrough mode
 
-        current_policy = db.query(Policy).filter(Policy.project_id == asset.project_id).order_by(Policy.active_from.desc()).first()
+        current_policy = db.query(Policy).filter(
+            Policy.project_id == asset.project_id).order_by(Policy.active_from.desc()).first()
 
         if not current_policy:
             return True, None  # No policy configured
@@ -465,7 +661,7 @@ class AssetService:
             dim_percent=request.dim_percent,
             source_mode=asset.control_mode,
             vendor=api_client_name,
-            status="simulated",  # TODO: Implement actual EXEDRA integration
+            status="pending",  # Will be updated to "sent" or "failed" after EXEDRA call
             requested_by_api_client=api_client_id,
             idempotency_key=idempotency_key
         )
@@ -492,11 +688,38 @@ class AssetService:
         db.add(audit_entry)
         db.commit()
 
-        # TODO: Implement actual EXEDRA integration similar to schedule updates:
-        # 1. Get EXEDRA configuration from CredentialService
-        # 2. Use ExedraService to send realtime command
-        # 3. Update command status based on success/failure
-        # 4. Handle errors appropriately
+        try:
+            # Get EXEDRA configuration from CredentialService
+            api_client = asset.project.api_clients[0] if asset.project.api_clients else None
+            if not api_client:
+                raise ValueError(f"No API client found for asset {asset.external_id}")
+
+            exedra_config = CredentialService.get_exedra_config(api_client, db)
+            if not exedra_config.get("token"):
+                raise ValueError(f"No EXEDRA API token found for client {api_client.name}")
+            if not exedra_config.get("base_url"):
+                raise ValueError(f"No EXEDRA base URL found for client {api_client.name}")
+
+            # Send realtime command to EXEDRA
+            result = ExedraService.send_device_command(
+                device_id=asset.external_id,
+                command_type="setDimmingLevel",
+                level=request.dim_percent,
+                token=exedra_config["token"],
+                base_url=exedra_config["base_url"]
+            )
+
+            # Update command status to success
+            command.status = "sent"
+            command.response = result
+            db.commit()
+
+        except (ValueError, RuntimeError) as e:
+            # Update command status to failed with error details
+            command.status = "failed"
+            command.response = {"error": str(e)}
+            db.commit()
+
 
         return command.realtime_command_id
 

@@ -6,7 +6,7 @@ build:
       - pip install --upgrade pip
       - pip install -r requirements.txt
 run:
-  runtime-version: 3.13
+  runtime-version: 3.11
   command: cd src && python server.py
   network:
     port: 8000

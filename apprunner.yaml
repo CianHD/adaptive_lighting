@@ -1,20 +1,20 @@
 version: 1.0
-runtime: python3.11
+runtime: python311
 build:
   commands:
     install:
-      - pip install --upgrade pip
-      - pip install -r requirements.txt
+      - pip3 install --upgrade pip
+      - pip3 install -r requirements.txt
 run:
   runtime-version: 3.11
-  command: cd src && python server.py
+  command: cd src && python3 server.py
   network:
     port: 8000
     env:
       - name: ENVIRONMENT
         value: "production"
       - name: AWS_SECRET_NAME
-        value: "adaptive-lighting/production"
+        value: "prod/adaptive-app"
       - name: AWS_REGION
         value: "ap-southeast-2"
       - name: HOST
@@ -34,11 +34,11 @@ run:
       - name: MAX_REQUESTS_JITTER
         value: "100"
   instances:
-    cpu: 1024  # 1 vCPU
-    memory: 2048  # 2 GB RAM
+    cpu: 512   # 0.5 vCPU
+    memory: 1024  # 1 GB RAM
   auto-scaling:
     min-size: 1
-    max-size: 3
+    max-size: 2
     target-cpu: 70
     target-memory: 80
   health-check:

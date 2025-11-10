@@ -2,7 +2,7 @@ version: 1.0
 runtime: python311
 build:
   commands:
-    install:
+    build:
       - pip3 install --upgrade pip
       - pip3 install -r requirements.txt
 run:
@@ -33,18 +33,3 @@ run:
         value: "1000"
       - name: MAX_REQUESTS_JITTER
         value: "100"
-  instances:
-    cpu: 512   # 0.5 vCPU
-    memory: 1024  # 1 GB RAM
-  auto-scaling:
-    min-size: 1
-    max-size: 2
-    target-cpu: 70
-    target-memory: 80
-  health-check:
-    path: "/health"
-    interval: 30
-    timeout: 5
-    healthy-threshold: 2
-    unhealthy-threshold: 5
-    startup-grace-period: 60

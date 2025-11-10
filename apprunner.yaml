@@ -1,13 +1,13 @@
 version: 1.0
-runtime: docker
+runtime: python3.13
 build:
   commands:
-    build:
-      - echo "Building Adaptive Lighting API for AWS App Runner"
-      - docker build -t adaptive-lighting-api .
+    install:
+      - pip install --upgrade pip
+      - pip install -r requirements.txt
 run:
-  runtime-version: latest
-  command: python src/server.py
+  runtime-version: 3.13
+  command: cd src && python server.py
   network:
     port: 8000
     env:

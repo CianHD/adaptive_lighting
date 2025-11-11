@@ -8,11 +8,14 @@ run:
   runtime-version: 3.11
   pre-run:  
     - pip3 install -r requirements.txt
+    - export PYTHONPATH=/app:$PYTHONPATH
   command: python3 src/server.py
   network:
     port: 8000
     env: PORT
   env:
+    - name: PYTHONPATH
+      value: "/app"
     - name: ENVIRONMENT
       value: "production"
     - name: AWS_SECRET_NAME

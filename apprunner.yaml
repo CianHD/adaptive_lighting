@@ -7,7 +7,7 @@ build:
       - pip3 install -r requirements.txt
 run:
   runtime-version: 3.11
-  command: cd src && python3 server.py
+  command: python3 src/server.py
   network:
     port: 8000
   env:

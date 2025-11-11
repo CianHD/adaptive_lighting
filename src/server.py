@@ -4,7 +4,7 @@ Production-ready server startup configuration for containerized deployment.
 
 import uvicorn
 from main import app
-from src.core.config import settings
+from core.config import settings
 
 def get_server_config():
     """Get server configuration based on environment"""

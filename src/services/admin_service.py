@@ -345,6 +345,130 @@ class AdminService:
         ).first()
 
     @staticmethod
+    def delete_api_key(
+        api_key_id: str,
+        project_id: str,
+        api_client_name: str,
+        db: Session
+    ) -> None:
+        """
+        Delete an API key.
+        
+        Args:
+            api_key_id: ID of the API key to delete
+            project_id: Project ID for authorization
+            api_client_name: Name of API client performing deletion (for audit)
+            db: Database session
+            
+        Raises:
+            ValueError: If API key not found or doesn't belong to project
+        """
+        # Find the API key and verify it belongs to this project
+        api_key = db.query(ApiKey).join(ApiClient).filter(
+            ApiKey.api_key_id == api_key_id,
+            ApiClient.project_id == project_id
+        ).first()
+
+        if not api_key:
+            raise ValueError(f"API key {api_key_id} not found in this project")
+
+        # Get info for audit log before deletion
+        deleted_key_info = {
+            "api_key_id": api_key_id,
+            "api_client_id": api_key.api_client_id,
+            "api_client_name": api_key.api_client.name,
+            "scopes": api_key.scopes,
+            "last_used_at": api_key.last_used_at.isoformat() if api_key.last_used_at else None
+        }
+
+        # Delete the API key
+        db.delete(api_key)
+
+        # Create audit log entry
+        audit_entry = AuditLog(
+            actor="api",
+            project_id=project_id,
+            action="delete_api_key",
+            entity="api_key",
+            entity_id=api_key_id,
+            details={
+                **deleted_key_info,
+                "deleted_by": api_client_name
+            }
+        )
+        db.add(audit_entry)
+        db.commit()
+
+    @staticmethod
+    def update_api_key(
+        api_key_id: str,
+        scopes: List[str],
+        project_id: str,
+        api_client_name: str,
+        db: Session
+    ) -> ApiKey:
+        """
+        Update an API key's scopes.
+        
+        Note: The api_client (owner) of the key cannot be changed. Keys are permanently
+        bound to their original API client for security and audit purposes.
+        
+        Args:
+            api_key_id: ID of the API key to update
+            scopes: New list of scopes for the key
+            project_id: Project ID for authorization
+            api_client_name: Name of API client performing update (for audit)
+            db: Database session
+            
+        Returns:
+            Updated ApiKey instance
+            
+        Raises:
+            ValueError: If API key not found, doesn't belong to project, or scopes invalid
+        """
+        # Find the API key and verify it belongs to this project
+        api_key = db.query(ApiKey).join(ApiClient).filter(
+            ApiKey.api_key_id == api_key_id,
+            ApiClient.project_id == project_id
+        ).first()
+
+        if not api_key:
+            raise ValueError(f"API key {api_key_id} not found in this project")
+
+        # Validate the new scopes
+        valid_scopes, invalid_scopes = ScopeService.validate_scopes(scopes, db=db)
+        if not valid_scopes:
+            raise ValueError(f"Invalid scopes: {', '.join(invalid_scopes)}")
+
+        # Store old scopes for audit
+        old_scopes = api_key.scopes.copy()
+
+        # Update the scopes
+        api_key.scopes = scopes
+
+        # Create audit log entry
+        audit_entry = AuditLog(
+            actor="api",
+            project_id=project_id,
+            action="update_api_key",
+            entity="api_key",
+            entity_id=api_key_id,
+            details={
+                "api_key_id": api_key_id,
+                "api_client_id": api_key.api_client_id,
+                "api_client_name": api_key.api_client.name,
+                "old_scopes": old_scopes,
+                "new_scopes": scopes,
+                "updated_by": api_client_name
+            }
+        )
+        db.add(audit_entry)
+        db.commit()
+        db.refresh(api_key)
+
+        return api_key
+
+    @staticmethod
     def sync_scope_catalogue_with_audit(
         project_id: str,
         api_client_name: str,

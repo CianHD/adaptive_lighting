@@ -36,6 +36,8 @@ class AssetCreateRequest(BaseModel):
     exedra_control_program_id: str = Field(..., description="EXEDRA control program ID")
     exedra_calendar_id: str = Field(..., description="EXEDRA calendar ID")
     control_mode: str = Field(pattern=r"^(optimise|passthrough)$", description="Control mode for the asset")
+    road_class: Optional[str] = Field(None, description="Road classification for the asset")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata for the asset")
 
 class AssetCreateResponse(BaseModel):
     """Response for asset creation"""
@@ -45,6 +47,8 @@ class AssetCreateResponse(BaseModel):
     exedra_name: str
     exedra_control_program_id: str
     exedra_calendar_id: str
+    road_class: Optional[str]
+    metadata: Optional[Dict[str, Any]]
     created_at: datetime
 
 class AssetUpdateRequest(BaseModel):
@@ -52,6 +56,7 @@ class AssetUpdateRequest(BaseModel):
     exedra_name: Optional[str] = Field(None, description="EXEDRA device name")
     exedra_control_program_id: Optional[str] = Field(None, description="EXEDRA control program ID")
     exedra_calendar_id: Optional[str] = Field(None, description="EXEDRA calendar ID")
+    road_class: Optional[str] = Field(None, description="Road classification for the asset")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional asset metadata")
 
 class AssetUpdateResponse(BaseModel):
@@ -61,5 +66,6 @@ class AssetUpdateResponse(BaseModel):
     exedra_name: str
     exedra_control_program_id: str
     exedra_calendar_id: str
+    road_class: Optional[str]
     metadata: Dict[str, Any]
     updated_at: datetime

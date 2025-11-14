@@ -52,13 +52,14 @@ class ExedraService:
         if not base_url:
             raise ValueError("EXEDRA base URL cannot be empty")
 
-        url = f"{base_url}/api/v1/controlprograms/{program_id}"
+        url = f"{base_url}/api/v2/controlprograms/{program_id}"
         headers = ExedraService._get_headers(token)
 
         try:
             response = requests.get(url, headers=headers, timeout=30, verify=EXEDRA_VERIFY_SSL)
             response.raise_for_status()
             return response.json()
+
         except requests.RequestException as e:
             raise RuntimeError(f"Failed to retrieve control program {program_id}: {str(e)}") from e
 
@@ -120,7 +121,7 @@ class ExedraService:
             "tenant": existing.get("tenant", "hyperion"),
         }
 
-        url = f"{base_url}/api/v1/controlprograms/{program_id}"
+        url = f"{base_url}/api/v2/controlprograms/{program_id}"
         headers = ExedraService._get_headers(token)
 
         try:

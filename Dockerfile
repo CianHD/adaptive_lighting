@@ -1,5 +1,5 @@
-# Use Python 3.13 slim - latest stable with cutting-edge package compatibility
-FROM python:3.13.9-slim
+FROM python:3.11-slim
+# AWS App Runner runtimes only support up to 3.11 so using this for consistency
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \

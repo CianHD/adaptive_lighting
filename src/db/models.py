@@ -59,7 +59,7 @@ class ClientCredential(Base):
     api_client: Mapped[ApiClient] = relationship(back_populates="credentials")
 
     __table_args__ = (
-        UniqueConstraint('api_client_id', 'service_name', 'environment', name="client_credential_api_client_service_env_key"),
+        UniqueConstraint('api_client_id', 'service_name', 'credential_type', 'environment', name="client_credential_api_client_service_type_env_key"),
         Index('client_credential_active', 'api_client_id', 'service_name', 'is_active'),
         Index('client_credential_service', 'service_name', 'environment', postgresql_where=text('is_active = true')),
         CheckConstraint("credential_type in ('api_token','oauth_token','certificate','other','base_url')", name="client_credential_credential_type_check"),

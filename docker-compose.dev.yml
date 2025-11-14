@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # Main API service
+  adaptive-lighting-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+      - HOST=0.0.0.0
+      - PORT=8000
+    env_file:
+      - .env  # Load from .env file
+    volumes:
+      - ./src:/app:ro  # Mount source code for development (read-only)
+    depends_on:
+      - commission-processor
+    networks:
+      - adaptive-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Optional: Redis for caching (future enhancement)
+  # redis:
+  #   image: redis:7-alpine
+  #   ports:
+  #     - "6379:6379"
+  #   networks:
+  #     - adaptive-network
+
+networks:
+  adaptive-network:
+    driver: bridge

@@ -61,6 +61,10 @@ class ApiKeyRequest(BaseModel):
     api_client_name: str
     scopes: List[str] = ["asset:read"]  # Default to asset read scope
 
+class ApiKeyUpdateRequest(BaseModel):
+    """Request to update an existing API key (scopes only)"""
+    scopes: List[str]
+
 class ApiKeyResponse(BaseModel):
     """Response for API key generation"""
     api_key_id: str

@@ -161,15 +161,19 @@ class AssetService:
             Dictionary containing schedule data from EXEDRA
             
         Raises:
-            ValueError: If asset has no EXEDRA program ID configured
+            ValueError: If asset has no EXEDRA control program ID configured
             RuntimeError: If EXEDRA API call fails
         """
-        # Get EXEDRA program ID from asset metadata
-        metadata = asset.asset_metadata or {}
-        exedra_program_id = metadata.get("exedra_program_id")
+        # Get EXEDRA control program ID from the active schedule
+        active_schedule = db.query(Schedule).filter(
+            Schedule.asset_id == asset.asset_id,
+            Schedule.status == "active"
+        ).order_by(Schedule.created_at.desc()).first()
 
-        if not exedra_program_id:
-            raise ValueError(f"Asset {asset.external_id} has no EXEDRA program ID configured")
+        if not active_schedule or not active_schedule.exedra_control_program_id:
+            raise ValueError(f"Asset {asset.external_id} has no active schedule associated with asset")
+
+        exedra_control_program_id = active_schedule.exedra_control_program_id
 
         # Get client's EXEDRA configuration (token and base URL)
         api_client = asset.project.api_clients[0] if asset.project.api_clients else None
@@ -185,7 +189,7 @@ class AssetService:
         try:
             # Fetch from EXEDRA using client's token and base URL
             exedra_data = ExedraService.get_control_program(
-                exedra_program_id,
+                exedra_control_program_id,
                 exedra_config["token"],
                 exedra_config["base_url"]
             )
@@ -211,7 +215,7 @@ class AssetService:
                     })
 
             schedule_data = {
-                "schedule_id": exedra_program_id,
+                "schedule_id": exedra_control_program_id,
                 "steps": sorted(steps, key=lambda x: x["time"]),
                 "provider": "exedra",
                 "status": "active",
@@ -224,7 +228,7 @@ class AssetService:
                     # Check if we already have this schedule version in local DB
                     existing_schedule = db.query(Schedule).filter(
                         Schedule.asset_id == asset.asset_id,
-                        Schedule.schedule_id == exedra_program_id,
+                        Schedule.exedra_control_program_id == exedra_control_program_id,
                         Schedule.status == "active"
                     ).first()
 
@@ -237,7 +241,7 @@ class AssetService:
 
                         # Create new schedule record for audit trail
                         schedule = Schedule(
-                            schedule_id=exedra_program_id,
+                            exedra_control_program_id=exedra_control_program_id,
                             asset_id=asset.asset_id,
                             schedule={"steps": schedule_data["steps"]},
                             provider="exedra",
@@ -252,8 +256,9 @@ class AssetService:
 
             return schedule_data
 
-        except (ValueError, RuntimeError, ConnectionError, TimeoutError) as e:
-            raise RuntimeError(f"Failed to retrieve EXEDRA schedule: {str(e)}") from e
+        except (ValueError, RuntimeError, ConnectionError, TimeoutError):  # pylint: disable=try-except-raise
+            # Let exception propagate to API layer for user-friendly messaging, middleware will log full exception details
+            raise
 
     @staticmethod
     def update_asset_schedule_in_exedra(
@@ -290,12 +295,16 @@ class AssetService:
             if existing_schedule:
                 return str(existing_schedule.schedule_id)
 
-        # Get EXEDRA program ID
-        metadata = asset.asset_metadata or {}
-        exedra_program_id = metadata.get("exedra_program_id")
+        # Get EXEDRA control program ID from the active schedule
+        active_schedule = db.query(Schedule).filter(
+            Schedule.asset_id == asset.asset_id,
+            Schedule.status == "active"
+        ).order_by(Schedule.created_at.desc()).first()
 
-        if not exedra_program_id:
-            raise ValueError(f"Asset {asset.external_id} has no EXEDRA program ID configured")
+        if not active_schedule or not active_schedule.exedra_control_program_id:
+            raise ValueError(f"Asset {asset.external_id} has no active schedule associated with asset")
+
+        exedra_control_program_id = active_schedule.exedra_control_program_id
 
         # Get client's EXEDRA configuration (token and base URL)
         api_client = asset.project.api_clients[0] if asset.project.api_clients else None
@@ -317,7 +326,7 @@ class AssetService:
 
             # Update in EXEDRA
             success = ExedraService.update_control_program(
-                program_id=exedra_program_id,
+                program_id=exedra_control_program_id,
                 commands=exedra_commands,
                 token=exedra_config["token"],
                 base_url=exedra_config["base_url"],
@@ -357,7 +366,7 @@ class AssetService:
                     details={
                         "asset_external_id": asset.external_id,
                         "schedule_steps": schedule_steps,
-                        "exedra_program_id": exedra_program_id,
+                        "exedra_control_program_id": exedra_control_program_id,
                         "provider": "exedra",
                         "schedule_status": schedule_status,
                         "note": "Commissioning deferred to background job due to typical multi-minute duration"
@@ -374,20 +383,16 @@ class AssetService:
             else:
                 raise RuntimeError("EXEDRA update failed")
 
-        except (IntegrityError, DatabaseError, SQLAlchemyError) as db_error:
+        # Rollback database changes on error, then re-raise
+        except (IntegrityError, DatabaseError, SQLAlchemyError):
             db.rollback()
-            raise RuntimeError(f"Database error during EXEDRA schedule update: {str(db_error)}") from db_error
-        except (ValueError, RuntimeError, ConnectionError, TimeoutError) as api_error:
+            raise
+        except (ValueError, RuntimeError, ConnectionError, TimeoutError):
             db.rollback()
-            raise RuntimeError(f"EXEDRA API error during schedule update: {str(api_error)}") from api_error
+            raise
 
     @staticmethod
-    def commission_asset(
-        asset: Asset,
-        actor: str,
-        db: Session,
-        timeout: float = 180.0
-    ) -> bool:
+    def commission_asset(asset: Asset, actor: str, db: Session, timeout: float = 180.0) -> bool:
         """
         Commission an asset with automatic retry logic (for schedules in 'pending_commission' status)
         
@@ -473,7 +478,7 @@ class AssetService:
             return True
 
         except (ValueError, RuntimeError) as commission_error:
-            # Store the error for tracking
+            # Store the actual error for audit/debugging purposes
             pending_schedule.commission_error = str(commission_error)
 
             # Create audit log for failed commissioning
@@ -715,11 +720,10 @@ class AssetService:
             db.commit()
 
         except (ValueError, RuntimeError) as e:
-            # Update command status to failed with error details
+            # Update command status to failed with error details for debugging
             command.status = "failed"
             command.response = {"error": str(e)}
             db.commit()
-
 
         return command.realtime_command_id
 
@@ -732,7 +736,9 @@ class AssetService:
         exedra_control_program_id: str,
         exedra_calendar_id: str,
         actor: str,
-        db: Session
+        db: Session,
+        road_class: str | None = None,
+        metadata: Dict[str, Any] | None = None
     ) -> Asset:
         """
         Create a new asset with EXEDRA metadata and initial schedule record.
@@ -746,6 +752,8 @@ class AssetService:
             exedra_calendar_id: EXEDRA calendar ID
             actor: Name of the actor creating the asset
             db: Database session
+            road_class: Optional road classification for the asset
+            metadata: Optional additional metadata for the asset
             
         Returns:
             Created Asset instance
@@ -767,12 +775,21 @@ class AssetService:
             "exedra_calendar_id": exedra_calendar_id
         }
 
+        # Add road_class to metadata if provided
+        if road_class is not None:
+            asset_metadata["road_class"] = road_class
+
+        # Merge additional metadata if provided
+        if metadata is not None:
+            asset_metadata.update(metadata)
+
         # Create the asset
         asset = Asset(
             project_id=project_id,
             external_id=external_id,
             name=exedra_name,
             control_mode=control_mode,
+            road_class=road_class,
             asset_metadata=asset_metadata
         )
 
@@ -816,6 +833,7 @@ class AssetService:
         exedra_name: Optional[str] = None,
         exedra_control_program_id: Optional[str] = None,
         exedra_calendar_id: Optional[str] = None,
+        road_class: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         actor: str = "unknown",
         db: Session = None
@@ -829,6 +847,7 @@ class AssetService:
             exedra_name: Updated EXEDRA device name
             exedra_control_program_id: Updated EXEDRA control program ID
             exedra_calendar_id: Updated EXEDRA calendar ID
+            road_class: Updated road classification for the asset
             metadata: Updated metadata (merged with existing)
             actor: Who is performing the update
             db: Database session
@@ -849,7 +868,7 @@ class AssetService:
             raise ValueError(f"Asset with external_id '{external_id}' not found in this project")
 
         # Check if any updates are provided
-        if not any([exedra_name, exedra_control_program_id, exedra_calendar_id, metadata]):
+        if not any([exedra_name, exedra_control_program_id, exedra_calendar_id, road_class, metadata]):
             raise ValueError("At least one field must be provided for update")
 
         # Update asset fields
@@ -857,8 +876,12 @@ class AssetService:
             asset.name = exedra_name
 
         # Update metadata - merge with existing
-        if metadata is not None:
+        if metadata is not None or road_class is not None:
             current_metadata = asset.asset_metadata or {}
+
+            # Update road classification if provided
+            if road_class is not None:
+                current_metadata["road_class"] = road_class
 
             # Update EXEDRA fields in metadata
             if exedra_control_program_id is not None:
@@ -867,7 +890,8 @@ class AssetService:
                 current_metadata["exedra_calendar_id"] = exedra_calendar_id
 
             # Merge additional metadata
-            current_metadata.update(metadata)
+            if metadata is not None:
+                current_metadata.update(metadata)
             asset.asset_metadata = current_metadata
         else:
             # Update EXEDRA fields even if no additional metadata provided
@@ -898,6 +922,7 @@ class AssetService:
                         "exedra_name": exedra_name,
                         "exedra_control_program_id": exedra_control_program_id,
                         "exedra_calendar_id": exedra_calendar_id,
+                        "road_class": road_class,
                         "metadata_updated": metadata is not None
                     }
                 }

@@ -8,7 +8,7 @@ from src.core.security import AuthenticatedClient, require_scopes
 from src.db.session import get_db
 from src.services.admin_service import AdminService
 from src.services.scope_service import ScopeService
-from src.schemas.admin import PolicyRequest, PolicyResponse, KillSwitchRequest, KillSwitchResponse, AuditLogResponse, ExedraConfigRequest, ExedraConfigResponse, ApiKeyRequest, ApiKeyResponse, CurrentApiKeyResponse, ScopeListResponse, ScopeInfo
+from src.schemas.admin import PolicyRequest, PolicyResponse, KillSwitchRequest, KillSwitchResponse, AuditLogResponse, ExedraConfigRequest, ExedraConfigResponse, ApiKeyRequest, ApiKeyUpdateRequest, ApiKeyResponse, CurrentApiKeyResponse, ScopeListResponse, ScopeInfo
 
 router = APIRouter(prefix="/v1/{project_code}/admin", tags=["admin"])
 
@@ -347,14 +347,15 @@ async def generate_api_key(
 @router.put("/api-key/{api_key_id}", response_model=ApiKeyResponse)
 async def update_api_key(
     api_key_id: str,
-    request: ApiKeyRequest,
+    request: ApiKeyUpdateRequest,
     client: AuthenticatedClient = Depends(require_scopes("admin:apikey:update")),
     db: Session = Depends(get_db)
 ):
     """
-    Update an existing API key's scopes and details.
+    Update an existing API key's scopes.
     
-    This endpoint allows administrators to modify API key permissions.
+    This endpoint allows administrators to modify API key scopes (permissions).
+    The API client assignment cannot be changed - keys remain bound to their original client.
     The original API key value remains unchanged.
     """
     try:

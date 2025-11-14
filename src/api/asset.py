@@ -60,6 +60,8 @@ async def create_asset(
             exedra_control_program_id=request.exedra_control_program_id,
             exedra_calendar_id=request.exedra_calendar_id,
             actor=client.api_client.name,
+            road_class=request.road_class,
+            metadata=request.metadata,
             db=db
         )
 
@@ -70,6 +72,8 @@ async def create_asset(
             exedra_name=asset.name,
             exedra_control_program_id=asset.asset_metadata["exedra_control_program_id"],
             exedra_calendar_id=asset.asset_metadata["exedra_calendar_id"],
+            road_class=asset.road_class,
+            metadata=asset.asset_metadata,
             created_at=asset.created_at
         )
 
@@ -115,6 +119,7 @@ async def update_asset(
             exedra_name=request.exedra_name,
             exedra_control_program_id=request.exedra_control_program_id,
             exedra_calendar_id=request.exedra_calendar_id,
+            road_class=request.road_class,
             metadata=request.metadata,
             actor=client.api_client.name,
             db=db
@@ -126,6 +131,7 @@ async def update_asset(
             exedra_name=asset.name,
             exedra_control_program_id=asset.asset_metadata.get("exedra_control_program_id"),
             exedra_calendar_id=asset.asset_metadata.get("exedra_calendar_id"),
+            road_class=asset.asset_metadata.get("road_class"),
             metadata=asset.asset_metadata,
             updated_at=asset.updated_at
         )
@@ -236,10 +242,16 @@ async def get_asset_schedule(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         ) from e
-    except Exception as e:
+    except RuntimeError as e:
+        # Service layer errors - sanitized message for users
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"EXEDRA service error: {str(e)}"
+            detail="Unable to retrieve schedule from external lighting control system"
+        ) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve asset schedule"
         ) from e
 
 
@@ -296,10 +308,16 @@ async def update_asset_schedule(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         ) from e
-    except Exception as e:
+    except RuntimeError as e:
+        # Service layer errors - sanitized message for users
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"EXEDRA service error: {str(e)}"
+            detail="Unable to update schedule in external lighting control system"
+        ) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update asset schedule"
         ) from e
 
 

@@ -3,6 +3,7 @@ from typing import Optional
 from cryptography.fernet import Fernet
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.db.models import ClientCredential, ApiClient
 
@@ -37,7 +38,8 @@ class CredentialService:
         credential_type: str,
         value: str,
         environment: str = "prod",
-        db: Session = None
+        db: Session = None,
+        auto_commit: bool = True
     ) -> ClientCredential:
         """
         Store an encrypted credential for a client
@@ -45,44 +47,63 @@ class CredentialService:
         Args:
             api_client_id: ID of the API client
             service_name: Name of the service (e.g., 'exedra')
-            credential_type: Type of credential (e.g., 'api_key')
+            credential_type: Type of credential (e.g., 'api_token', 'base_url')
             value: The credential value to encrypt
             environment: Environment (prod, test, staging)
             db: Database session
+            auto_commit: Whether to commit automatically (False for batch operations)
             
         Returns:
             Created ClientCredential record
+            
+        Raises:
+            SQLAlchemyError: If database operation fails
         """
-        service = CredentialService()
-        encrypted_value = service.encrypt_credential(value)
+        try:
+            service = CredentialService()
+            encrypted_value = service.encrypt_credential(value)
 
-        # Deactivate any existing credentials for this service/environment
-        existing = db.query(ClientCredential).filter(
-            and_(
-                ClientCredential.api_client_id == api_client_id,
-                ClientCredential.service_name == service_name,
-                ClientCredential.environment == environment,
-                ClientCredential.is_active
+            # Deactivate any existing credentials for this service/credential_type/environment
+            existing = db.query(ClientCredential).filter(
+                and_(
+                    ClientCredential.api_client_id == api_client_id,
+                    ClientCredential.service_name == service_name,
+                    ClientCredential.credential_type == credential_type,
+                    ClientCredential.environment == environment,
+                    ClientCredential.is_active
+                )
+            ).all()
+
+            for cred in existing:
+                cred.is_active = False
+
+            # Flush to ensure deactivation happens before inserting new credential
+            # This prevents unique constraint violations
+            if existing:
+                db.flush()
+
+            # Create new credential
+            credential = ClientCredential(
+                api_client_id=api_client_id,
+                service_name=service_name,
+                credential_type=credential_type,
+                encrypted_value=encrypted_value,
+                environment=environment,
+                is_active=True
             )
-        ).all()
 
-        for cred in existing:
-            cred.is_active = False
+            db.add(credential)
 
-        # Create new credential
-        credential = ClientCredential(
-            api_client_id=api_client_id,
-            service_name=service_name,
-            credential_type=credential_type,
-            encrypted_value=encrypted_value,
-            environment=environment,
-            is_active=True
-        )
+            if auto_commit:
+                db.commit()
+                db.refresh(credential)
 
-        db.add(credential)
-        db.commit()
+            return credential
 
-        return credential
+        except SQLAlchemyError as e:
+            if auto_commit:
+                db.rollback()
+            raise RuntimeError(f"Failed to store credential: {str(e)}") from e
 
     @staticmethod
     def get_credential_by_type(
@@ -164,7 +185,10 @@ class CredentialService:
         environment: str = "prod"
     ) -> tuple[ClientCredential, ClientCredential]:
         """
-        Store both EXEDRA API token and base URL for a client
+        Store both EXEDRA API token and base URL for a client in a single transaction.
+        
+        This method ensures atomic operation - both credentials are stored or neither is.
+        If either operation fails, the entire transaction is rolled back.
         
         Args:
             api_client: ApiClient instance
@@ -175,23 +199,40 @@ class CredentialService:
             
         Returns:
             Tuple of (token_credential, url_credential)
+            
+        Raises:
+            RuntimeError: If any database operation fails (transaction will be rolled back)
         """
-        token_cred = CredentialService.store_credential(
-            api_client_id=api_client.api_client_id,
-            service_name="exedra",
-            credential_type="api_token",
-            value=api_token,
-            environment=environment,
-            db=db
-        )
+        try:
+            # Store both credentials without auto-commit (batch operation)
+            token_cred = CredentialService.store_credential(
+                api_client_id=api_client.api_client_id,
+                service_name="exedra",
+                credential_type="api_token",
+                value=api_token,
+                environment=environment,
+                db=db,
+                auto_commit=False  # Don't commit yet
+            )
 
-        url_cred = CredentialService.store_credential(
-            api_client_id=api_client.api_client_id,
-            service_name="exedra",
-            credential_type="base_url",
-            value=base_url,
-            environment=environment,
-            db=db
-        )
+            url_cred = CredentialService.store_credential(
+                api_client_id=api_client.api_client_id,
+                service_name="exedra",
+                credential_type="base_url",
+                value=base_url,
+                environment=environment,
+                db=db,
+                auto_commit=False  # Don't commit yet
+            )
 
-        return token_cred, url_cred
+            # Commit both together - atomic operation
+            db.commit()
+            db.refresh(token_cred)
+            db.refresh(url_cred)
+
+            return token_cred, url_cred
+
+        except (SQLAlchemyError, RuntimeError) as e:
+            # Rollback entire transaction on any error
+            db.rollback()
+            raise RuntimeError(f"Failed to store EXEDRA config (transaction rolled back): {str(e)}") from e

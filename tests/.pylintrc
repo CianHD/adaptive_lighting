@@ -1,0 +1,20 @@
+[MASTER]
+# Pytest fixtures are intentionally used as function arguments
+# This is the standard pytest pattern and not actually redefining names
+
+[MESSAGES CONTROL]
+disable=
+    redefined-outer-name,  # Pytest fixtures pattern
+    unused-argument,       # Test fixtures may not be directly used
+    protected-access,      # Tests may need to access protected members
+    too-many-arguments,
+    too-many-positional-arguments,
+    line-too-long,
+    too-few-public-methods,
+    missing-module-docstring,
+    missing-class-docstring,
+    wrong-import-order,
+    duplicate-code
+
+[FORMAT]
+max-line-length=120

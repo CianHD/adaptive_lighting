@@ -106,13 +106,7 @@ class AssetService:
         )
 
     @staticmethod
-    def update_control_mode(
-        asset: Asset,
-        new_mode: str,
-        api_client_name: str,
-        project_id: str,
-        db: Session
-    ) -> Asset:
+    def update_control_mode(asset: Asset, new_mode: str, api_client_name: str, project_id: str, db: Session) -> Asset:
         """
         Update asset control mode and create audit trail.
         
@@ -214,12 +208,19 @@ class AssetService:
                         "dim": cmd.get("level", 0)
                     })
 
+            schedule_updated_at = (
+                getattr(active_schedule, "updated_at", None)
+                or getattr(active_schedule, "created_at", None)
+                or datetime.now(timezone.utc)
+            )
+
             schedule_data = {
                 "schedule_id": exedra_control_program_id,
                 "steps": sorted(steps, key=lambda x: x["time"]),
                 "provider": "exedra",
                 "status": "active",
-                "exedra_data": exedra_data
+                "exedra_data": exedra_data,
+                "updated_at": schedule_updated_at
             }
 
             # Sync to local database for audit trail (if db session provided)
@@ -267,7 +268,7 @@ class AssetService:
         actor: str,
         idempotency_key: Optional[str],
         db: Session
-    ) -> str:
+    ) -> Schedule:
         """
         Update an asset's schedule in EXEDRA
         
@@ -279,7 +280,7 @@ class AssetService:
             db: Database session
             
         Returns:
-            Schedule ID of the created schedule record
+            Newly created Schedule record
             
         Raises:
             ValueError: If asset has no EXEDRA program ID configured
@@ -293,7 +294,7 @@ class AssetService:
             ).first()
 
             if existing_schedule:
-                return str(existing_schedule.schedule_id)
+                return existing_schedule
 
         # Get EXEDRA control program ID from the active schedule
         active_schedule = db.query(Schedule).filter(
@@ -379,7 +380,8 @@ class AssetService:
                 # This runs immediately but doesn't block the API response
                 asyncio.create_task(AssetService._commission_single_asset(asset, actor, db))
 
-                return schedule.schedule_id
+                db.refresh(schedule)
+                return schedule
             else:
                 raise RuntimeError("EXEDRA update failed")
 

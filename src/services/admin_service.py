@@ -86,6 +86,65 @@ class AdminService:
         return policy
 
     @staticmethod
+    def update_policy(
+        policy_id: str,
+        request: PolicyRequest,
+        project_id: str,
+        api_client_name: str,
+        db: Session
+    ) -> Policy:
+        """
+        Update an existing policy configuration.
+        
+        Args:
+            policy_id: The policy ID to update
+            request: Policy update request
+            project_id: Project ID for verification
+            api_client_name: Name of API client updating policy
+            db: Database session
+            
+        Returns:
+            Updated Policy instance
+            
+        Raises:
+            ValueError: If policy not found or doesn't belong to project
+        """
+        # Get the policy
+        policy = db.query(Policy).filter(
+            Policy.policy_id == policy_id,
+            Policy.project_id == project_id
+        ).first()
+
+        if not policy:
+            raise ValueError(f"Policy {policy_id} not found for project")
+
+        # Update policy fields
+        policy.version = request.version
+        policy.body = request.body
+        policy.active_from = request.active_from if hasattr(request, 'active_from') else policy.active_from
+
+        db.flush()
+
+        # Audit log
+        audit_entry = AuditLog(
+            actor="api",
+            project_id=project_id,
+            action="policy_update",
+            entity="policy",
+            entity_id=policy.policy_id,
+            details={
+                "version": request.version,
+                "api_client": api_client_name,
+                "policy_fields": list(request.body.keys()),
+                "action": "update"
+            }
+        )
+        db.add(audit_entry)
+        db.commit()
+
+        return policy
+
+    @staticmethod
     def get_current_policy(
         project_id: str,
         db: Session

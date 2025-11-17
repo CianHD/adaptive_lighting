@@ -235,7 +235,8 @@ async def get_asset_schedule(
             schedule_id=schedule_data["schedule_id"],
             steps=[ScheduleStep(**step) for step in schedule_data["steps"]],
             provider=schedule_data["provider"],
-            status=schedule_data["status"]
+            status=schedule_data["status"],
+            updated_at=schedule_data["updated_at"]
         )
     except ValueError as e:
         raise HTTPException(
@@ -289,7 +290,7 @@ async def update_asset_schedule(
         schedule_steps = [{"time": step.time, "dim": step.dim} for step in request.steps]
 
         # Update schedule in EXEDRA
-        schedule_id = AssetService.update_asset_schedule_in_exedra(
+        schedule_record = AssetService.update_asset_schedule_in_exedra(
             asset=asset,
             schedule_steps=schedule_steps,
             actor=client.api_client.name,
@@ -298,10 +299,11 @@ async def update_asset_schedule(
         )
 
         return ScheduleResponse(
-            schedule_id=schedule_id,
+            schedule_id=str(schedule_record.schedule_id),
             steps=request.steps,
             provider="exedra",
-            status="active"
+            status="active",
+            updated_at=schedule_record.updated_at or schedule_record.created_at or datetime.now(timezone.utc)
         )
     except ValueError as e:
         raise HTTPException(

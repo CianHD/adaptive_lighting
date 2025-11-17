@@ -226,6 +226,7 @@ class Schedule(Base):
     schedule: Mapped[dict] = mapped_column(JSONB, nullable=False)  # TALQ/CMS-shaped
     provider: Mapped[str] = mapped_column(String, nullable=False)  # ours|vendor
     created_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
+    updated_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'), onupdate=text('now()'))
     status: Mapped[str] = mapped_column(String, nullable=False)  # active|superseded|failed|pending_commission
     commission_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # Number of commission attempts
     last_commission_attempt: Mapped["datetime | None"] = mapped_column(DateTime(timezone=True), nullable=True)  # Last attempt timestamp, updated by service

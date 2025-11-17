@@ -33,4 +33,4 @@ class ScheduleResponse(BaseModel):
     steps: List[ScheduleStep]
     provider: str  # "ours" | "vendor"
     status: str  # "active" | "superseded" | "failed"
-    created_at: datetime
+    updated_at: datetime

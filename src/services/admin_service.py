@@ -238,6 +238,71 @@ class AdminService:
         )
 
     @staticmethod
+    def get_project_mode(
+        project_id: str,
+        db: Session
+    ) -> tuple[str, datetime, str, Optional[str]]:
+        """Return the current project mode along with last change metadata."""
+        project = db.query(Project).filter(Project.project_id == project_id).first()
+        if not project:
+            raise ValueError("Project not found")
+
+        latest_change = db.query(AuditLog).filter(
+            AuditLog.project_id == project_id,
+            AuditLog.action == "project_mode_change"
+        ).order_by(desc(AuditLog.timestamp)).first()
+
+        if latest_change:
+            changed_at = latest_change.timestamp
+            changed_by = latest_change.details.get("api_client", "unknown")
+            reason = latest_change.details.get("reason")
+        else:
+            changed_at = project.created_at or datetime.now(timezone.utc)
+            changed_by = "system"
+            reason = None
+
+        return project.mode, changed_at, changed_by, reason
+
+    @staticmethod
+    def update_project_mode(
+        project_id: str,
+        new_mode: str,
+        api_client_name: str,
+        reason: Optional[str],
+        db: Session
+    ) -> tuple[Project, AuditLog]:
+        """Update the project's operating mode and emit an audit log entry."""
+        if new_mode not in {"live", "simulation"}:
+            raise ValueError("Invalid project mode")
+
+        project = db.query(Project).filter(Project.project_id == project_id).first()
+        if not project:
+            raise ValueError("Project not found")
+
+        previous_mode = project.mode
+        project.mode = new_mode
+
+        audit_entry = AuditLog(
+            actor="api",
+            project_id=project_id,
+            action="project_mode_change",
+            entity="project",
+            entity_id=project_id,
+            details={
+                "from": previous_mode,
+                "to": new_mode,
+                "reason": reason,
+                "api_client": api_client_name,
+                "unchanged": previous_mode == new_mode
+            }
+        )
+        db.add(audit_entry)
+        db.commit()
+        db.refresh(project)
+
+        return project, audit_entry
+
+    @staticmethod
     def get_audit_logs(
         project_id: str,
         limit: int,

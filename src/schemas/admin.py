@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal
 from datetime import datetime
 
 # Policy management
@@ -90,3 +90,17 @@ class ScopeListResponse(BaseModel):
     """Response for scope catalogue listing"""
     scopes: List[ScopeInfo]
     recommended_combinations: Dict[str, List[str]]
+
+
+class ProjectModeUpdateRequest(BaseModel):
+    """Request payload for switching project mode between live and simulation."""
+    mode: Literal["live", "simulation"]
+    reason: Optional[str] = None
+
+
+class ProjectModeResponse(BaseModel):
+    """Response payload describing the current project mode."""
+    mode: Literal["live", "simulation"]
+    changed_at: datetime
+    changed_by: str
+    reason: Optional[str] = None

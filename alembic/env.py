@@ -18,8 +18,8 @@ target_metadata = Base.metadata
 
 
 def get_database_url() -> str:
-    """Return the database connection string derived from app settings."""
-    return settings.DATABASE_URL
+    """Return the admin database URL in order to make changes to the DB Schema"""
+    return settings.DATABASE_ADMIN_URL
 
 
 def run_migrations_offline() -> None:

@@ -4,7 +4,7 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, DatabaseError, SQLAlchemyError
 
-from src.db.models import Asset, Schedule, AuditLog, Policy, RealtimeCommand
+from src.db.models import Asset, Schedule, AuditLog, Policy, RealtimeCommand, Project
 from src.schemas.asset import AssetResponse, AssetStateResponse
 from src.schemas.command import RealtimeCommandRequest
 from src.services.exedra_service import ExedraService
@@ -12,8 +12,26 @@ from src.services.credential_service import CredentialService
 from src.services.email_service import EmailService
 
 
+SIMULATION_MODE = "simulation"
+LIVE_MODE = "live"
+
+
 class AssetService:
     """Service class for asset-related business logic"""
+
+    @staticmethod
+    def _project_mode(asset: Asset, db: Optional[Session] = None) -> str:
+        """Return the owning project's mode, defaulting to live if unknown."""
+        project = getattr(asset, "project", None)
+        if project and isinstance(project, Project):
+            return getattr(project, "mode", LIVE_MODE)
+
+        if db:
+            project = db.query(Project).filter(Project.project_id == asset.project_id).first()
+            if project:
+                return project.mode
+
+        return LIVE_MODE
 
     @staticmethod
     def get_asset_by_external_id(external_id: str, project_id: str, db: Session) -> Optional[Asset]:
@@ -45,6 +63,9 @@ class AssetService:
         Returns:
             AssetStateResponse with current state from EXEDRA
         """
+        project_mode = AssetService._project_mode(asset, db)
+        is_simulated = project_mode == SIMULATION_MODE
+
         try:
             # Get current schedule from EXEDRA for compliance validation
             # and sync to local DB for audit trail
@@ -58,26 +79,27 @@ class AssetService:
             ).order_by(Schedule.created_at.desc()).first()
             current_schedule_id = current_schedule.schedule_id if current_schedule else None
 
-        # Query real-time asset status from EXEDRA
+        # Query real-time asset status from EXEDRA when in live mode
         current_dim = None  # Default fallback value
-        try:
-            # Get API client configuration
-            api_client = asset.project.api_clients[0] if asset.project.api_clients else None
-            if api_client:
-                exedra_config = CredentialService.get_exedra_config(api_client, db)
-                if exedra_config.get("token") and exedra_config.get("base_url"):
-                    # Get current dimming level from EXEDRA
-                    dimming_data = ExedraService.get_device_dimming_level(
-                        device_id=asset.external_id,
-                        token=exedra_config["token"],
-                        base_url=exedra_config["base_url"],
-                        refresh_device=False  # Can be made configurable
-                    )
-                    # Extract level from EXEDRA response
-                    current_dim = dimming_data.get("level") or dimming_data.get("dimmingLevel")
-        except (ValueError, RuntimeError):
-            # Fall back to local data on any EXEDRA connectivity issues
-            pass
+        if not is_simulated:
+            try:
+                # Get API client configuration
+                api_client = asset.project.api_clients[0] if asset.project.api_clients else None
+                if api_client:
+                    exedra_config = CredentialService.get_exedra_config(api_client, db)
+                    if exedra_config.get("token") and exedra_config.get("base_url"):
+                        # Get current dimming level from EXEDRA
+                        dimming_data = ExedraService.get_device_dimming_level(
+                            device_id=asset.external_id,
+                            token=exedra_config["token"],
+                            base_url=exedra_config["base_url"],
+                            refresh_device=False  # Can be made configurable
+                        )
+                        # Extract level from EXEDRA response
+                        current_dim = dimming_data.get("level") or dimming_data.get("dimmingLevel")
+            except (ValueError, RuntimeError):
+                # Fall back to local data on any EXEDRA connectivity issues
+                pass
 
         return AssetStateResponse(
             exedra_id=asset.external_id,
@@ -158,16 +180,39 @@ class AssetService:
             ValueError: If asset has no EXEDRA control program ID configured
             RuntimeError: If EXEDRA API call fails
         """
+        project_mode = AssetService._project_mode(asset, db)
+        is_simulated = project_mode == SIMULATION_MODE
+
         # Get EXEDRA control program ID from the active schedule
         active_schedule = db.query(Schedule).filter(
             Schedule.asset_id == asset.asset_id,
             Schedule.status == "active"
         ).order_by(Schedule.created_at.desc()).first()
 
-        if not active_schedule or not active_schedule.exedra_control_program_id:
+        if not active_schedule:
+            raise ValueError(f"Asset {asset.external_id} has no active schedule associated with asset")
+
+        if not active_schedule.exedra_control_program_id and not is_simulated:
             raise ValueError(f"Asset {asset.external_id} has no active schedule associated with asset")
 
         exedra_control_program_id = active_schedule.exedra_control_program_id
+
+        if is_simulated:
+            schedule_updated_at = (
+                getattr(active_schedule, "updated_at", None)
+                or getattr(active_schedule, "created_at", None)
+                or datetime.now(timezone.utc)
+            )
+
+            return {
+                "schedule_id": active_schedule.schedule_id,
+                "steps": active_schedule.schedule.get("steps", []) if active_schedule.schedule else [],
+                "provider": SIMULATION_MODE,
+                "status": active_schedule.status,
+                "exedra_data": None,
+                "updated_at": schedule_updated_at,
+                "mode": project_mode,
+            }
 
         # Get client's EXEDRA configuration (token and base URL)
         api_client = asset.project.api_clients[0] if asset.project.api_clients else None
@@ -286,6 +331,9 @@ class AssetService:
             ValueError: If asset has no EXEDRA program ID configured
             RuntimeError: If EXEDRA API call fails
         """
+        project_mode = AssetService._project_mode(asset, db)
+        is_simulated = project_mode == SIMULATION_MODE
+
         # Check for duplicate request using idempotency key
         if idempotency_key:
             existing_schedule = db.query(Schedule).filter(
@@ -296,16 +344,61 @@ class AssetService:
             if existing_schedule:
                 return existing_schedule
 
-        # Get EXEDRA control program ID from the active schedule
+        # Get EXEDRA control program ID from the active schedule (if available)
         active_schedule = db.query(Schedule).filter(
             Schedule.asset_id == asset.asset_id,
             Schedule.status == "active"
         ).order_by(Schedule.created_at.desc()).first()
 
-        if not active_schedule or not active_schedule.exedra_control_program_id:
+        if not active_schedule and not is_simulated:
             raise ValueError(f"Asset {asset.external_id} has no active schedule associated with asset")
 
-        exedra_control_program_id = active_schedule.exedra_control_program_id
+        exedra_control_program_id = active_schedule.exedra_control_program_id if active_schedule else None
+        exedra_calendar_id = active_schedule.exedra_calendar_id if active_schedule else None
+
+        if not exedra_control_program_id and not is_simulated:
+            raise ValueError(f"Asset {asset.external_id} has no active schedule associated with asset")
+
+        if is_simulated:
+            # Simulation mode simply stores the schedule locally and marks it active immediately
+            db.query(Schedule).filter(
+                Schedule.asset_id == asset.asset_id,
+                Schedule.status == "active"
+            ).update({"status": "superseded"})
+
+            schedule = Schedule(
+                asset_id=asset.asset_id,
+                schedule={"steps": schedule_steps},
+                provider=SIMULATION_MODE,
+                status="active",
+                commission_attempts=0,
+                last_commission_attempt=None,
+                commission_error=None,
+                idempotency_key=idempotency_key,
+                exedra_control_program_id=exedra_control_program_id,
+                exedra_calendar_id=exedra_calendar_id,
+                is_simulated=True,
+            )
+            db.add(schedule)
+
+            audit = AuditLog(
+                actor=actor,
+                action="update_schedule",
+                entity="asset",
+                entity_id=str(asset.asset_id),
+                details={
+                    "asset_external_id": asset.external_id,
+                    "schedule_steps": schedule_steps,
+                    "provider": SIMULATION_MODE,
+                    "schedule_status": "active",
+                    "mode": project_mode,
+                    "note": "Schedule stored locally in simulation mode; EXEDRA bypassed"
+                }
+            )
+            db.add(audit)
+            db.commit()
+            db.refresh(schedule)
+            return schedule
 
         # Get client's EXEDRA configuration (token and base URL)
         api_client = asset.project.api_clients[0] if asset.project.api_clients else None
@@ -347,7 +440,8 @@ class AssetService:
                     commission_attempts=0,
                     last_commission_attempt=None,
                     commission_error=None,
-                    idempotency_key=idempotency_key
+                    idempotency_key=idempotency_key,
+                    is_simulated=is_simulated,
                 )
 
                 # Mark any existing schedules as superseded
@@ -370,6 +464,7 @@ class AssetService:
                         "exedra_control_program_id": exedra_control_program_id,
                         "provider": "exedra",
                         "schedule_status": schedule_status,
+                        "mode": project_mode,
                         "note": "Commissioning deferred to background job due to typical multi-minute duration"
                     }
                 )
@@ -410,6 +505,8 @@ class AssetService:
         Raises:
             ValueError: If asset has no pending commission schedule
         """
+        project_mode = AssetService._project_mode(asset, db)
+
         # Find pending commission schedule
         pending_schedule = db.query(Schedule).filter(
             Schedule.asset_id == asset.asset_id,
@@ -418,6 +515,29 @@ class AssetService:
 
         if not pending_schedule:
             raise ValueError(f"Asset {asset.external_id} has no pending commission schedule")
+
+        if project_mode == SIMULATION_MODE:
+            # In simulation we don't call EXEDRA; mark schedule active immediately
+            pending_schedule.status = "active"
+            pending_schedule.is_simulated = True
+            pending_schedule.commission_error = None
+
+            audit = AuditLog(
+                actor=actor,
+                action="commission_asset",
+                entity="asset",
+                entity_id=str(asset.asset_id),
+                details={
+                    "asset_external_id": asset.external_id,
+                    "schedule_id": pending_schedule.schedule_id,
+                    "commissioning_success": True,
+                    "mode": project_mode,
+                    "note": "Simulation mode commission acknowledged without EXEDRA call"
+                }
+            )
+            db.add(audit)
+            db.commit()
+            return True
 
         # Check if max retries exceeded
         max_attempts = 3
@@ -526,6 +646,7 @@ class AssetService:
         pending_schedules = db.query(Schedule).filter(
             Schedule.status == "pending_commission",
             Schedule.commission_attempts < 3,
+            Schedule.is_simulated.is_(False),
             # Either never attempted, or last attempt was > 30 seconds ago
             (Schedule.last_commission_attempt.is_(None)) |
             (Schedule.last_commission_attempt <= ready_for_retry)
@@ -651,6 +772,9 @@ class AssetService:
             This is a skeleton implementation. For actual EXEDRA integration,
             this should be expanded to use ExedraService similar to schedule updates.
         """
+        project_mode = AssetService._project_mode(asset, db)
+        is_simulated = project_mode == SIMULATION_MODE
+
         # Check for existing command with same idempotency key
         if idempotency_key:
             existing_command = db.query(RealtimeCommand).filter(
@@ -670,7 +794,8 @@ class AssetService:
             vendor=api_client_name,
             status="pending",  # Will be updated to "sent" or "failed" after EXEDRA call
             requested_by_api_client=api_client_id,
-            idempotency_key=idempotency_key
+            idempotency_key=idempotency_key,
+            is_simulated=is_simulated,
         )
 
         db.add(command)
@@ -689,11 +814,22 @@ class AssetService:
                 "control_mode": asset.control_mode,
                 "api_client": api_client_name,
                 "note": request.note,
-                "idempotency_key": idempotency_key
+                "idempotency_key": idempotency_key,
+                "mode": project_mode,
             }
         )
         db.add(audit_entry)
         db.commit()
+
+        if is_simulated:
+            command.status = "simulated"
+            command.response = {
+                "mode": SIMULATION_MODE,
+                "note": request.note,
+                "message": "Command recorded without EXEDRA call in simulation mode"
+            }
+            db.commit()
+            return command.realtime_command_id
 
         try:
             # Get EXEDRA configuration from CredentialService

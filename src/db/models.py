@@ -13,10 +13,15 @@ class Project(Base):
     code: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
+    mode: Mapped[str] = mapped_column(String(20), default="live", nullable=False)
 
     api_clients: Mapped[list["ApiClient"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     assets: Mapped[list["Asset"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     sensors: Mapped[list["Sensor"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        CheckConstraint("mode in ('live','simulation')", name="project_mode_check"),
+    )
 
 class ApiClient(Base):
     __tablename__ = "api_client"
@@ -139,16 +144,16 @@ class SensorAssetLink(Base):
     sensor_asset_link_id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, server_default=text("gen_random_uuid()"))
     sensor_id: Mapped[str] = mapped_column(ForeignKey("sensor.sensor_id", ondelete="CASCADE"), nullable=False, index=True)
     asset_id: Mapped[str] = mapped_column(ForeignKey("asset.asset_id", ondelete="CASCADE"), nullable=False, index=True)
-    road_segment: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    section: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
 
     sensor: Mapped[Sensor] = relationship(back_populates="links")
     asset: Mapped[Asset] = relationship(back_populates="links")
 
     __table_args__ = (
-        UniqueConstraint("sensor_id", "asset_id", "road_segment", name="sensor_asset_link_sensor_id_asset_id_road_segment_key"),
+        UniqueConstraint("sensor_id", "asset_id", "section", name="sensor_asset_link_sensor_id_asset_id_section_key"),
         Index("sensor_asset_link_sensor_asset", "sensor_id", "asset_id"),
-        Index("sensor_asset_link_road_segment", "road_segment"),
+        Index("sensor_asset_link_section", "section"),
     )
 
 
@@ -161,10 +166,12 @@ class VehicleReading(Base):
     veh_count: Mapped[int] = mapped_column(Integer, nullable=False)
     hash_unique: Mapped[bytes] = mapped_column(nullable=False)
     source: Mapped[str | None] = mapped_column(String)
+    section: Mapped[str | None] = mapped_column(String(255), index=True)
 
     __table_args__ = (
         UniqueConstraint("sensor_id", "timestamp", name="vehicle_reading_sensor_id_timestamp_key"),
         Index("vehicle_reading_sensor_ts", "sensor_id", "timestamp", postgresql_using=None),
+        Index("vehicle_reading_sensor_section", "sensor_id", "section"),
     )
 
 class PedReading(Base):
@@ -175,10 +182,12 @@ class PedReading(Base):
     ped_count: Mapped[int] = mapped_column(Integer, nullable=False)
     hash_unique: Mapped[bytes] = mapped_column(nullable=False)
     source: Mapped[str | None] = mapped_column(String)
+    section: Mapped[str | None] = mapped_column(String(255), index=True)
 
     __table_args__ = (
         UniqueConstraint("sensor_id", "timestamp", name="ped_reading_sensor_id_timestamp_key"),
         Index("ped_reading_sensor_ts", "sensor_id", "timestamp"),
+        Index("ped_reading_sensor_section", "sensor_id", "section"),
     )
 
 class SpeedReading(Base):
@@ -187,13 +196,14 @@ class SpeedReading(Base):
     sensor_id: Mapped[str] = mapped_column(ForeignKey("sensor.sensor_id", ondelete="CASCADE"), nullable=False, index=True)
     timestamp: Mapped["datetime"] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     avg_speed_kmh: Mapped[float] = mapped_column()
-    p85_speed_kmh: Mapped[float | None] = mapped_column()
     hash_unique: Mapped[bytes] = mapped_column(nullable=False)
     source: Mapped[str | None] = mapped_column(String)
+    section: Mapped[str | None] = mapped_column(String(255), index=True)
 
     __table_args__ = (
         UniqueConstraint("sensor_id", "timestamp", name="speed_reading_sensor_id_timestamp_key"),
         Index("speed_reading_sensor_ts", "sensor_id", "timestamp"),
+        Index("speed_reading_sensor_section", "sensor_id", "section"),
     )
 
 
@@ -212,6 +222,7 @@ class RealtimeCommand(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     requested_by_api_client: Mapped[str | None] = mapped_column(ForeignKey("api_client.api_client_id"))
     idempotency_key: Mapped[str | None] = mapped_column(String)  # For proper idempotency support
+    is_simulated: Mapped[bool] = mapped_column(default=False, nullable=False)
 
     __table_args__ = (
         CheckConstraint("dim_percent BETWEEN 0 AND 100", name="realtime_command_dim_percent_check"),
@@ -227,6 +238,7 @@ class Schedule(Base):
     exedra_calendar_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # EXEDRA system calendar ID
     schedule: Mapped[dict] = mapped_column(JSONB, nullable=False)  # TALQ/CMS-shaped
     provider: Mapped[str] = mapped_column(String, nullable=False)  # ours|vendor
+    is_simulated: Mapped[bool] = mapped_column(default=False, nullable=False)
     created_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
     updated_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'), onupdate=text('now()'))
     status: Mapped[str] = mapped_column(String, nullable=False)  # active|superseded|failed|pending_commission
@@ -246,7 +258,7 @@ class Schedule(Base):
         Index("schedule_commission_status_attempts", "status", "commission_attempts", "last_commission_attempt"),  # Composite for processing
         Index("schedule_commission_failed", "asset_id", "status", "commission_attempts", postgresql_where=text("status = 'failed' AND commission_attempts >= 3")),  # Failed commissions
         UniqueConstraint("asset_id", "idempotency_key", name="schedule_asset_idempotency_key"),
-        CheckConstraint("provider in ('ours','vendor','exedra')", name="schedule_provider_check"),
+        CheckConstraint("provider in ('ours','vendor','exedra','simulation')", name="schedule_provider_check"),
         CheckConstraint("status in ('active','superseded','failed','pending_commission')", name="schedule_status_check"),
     )
 

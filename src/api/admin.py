@@ -8,7 +8,23 @@ from src.core.security import AuthenticatedClient, require_scopes
 from src.db.session import get_db
 from src.services.admin_service import AdminService
 from src.services.scope_service import ScopeService
-from src.schemas.admin import PolicyRequest, PolicyResponse, KillSwitchRequest, KillSwitchResponse, AuditLogResponse, ExedraConfigRequest, ExedraConfigResponse, ApiKeyRequest, ApiKeyUpdateRequest, ApiKeyResponse, CurrentApiKeyResponse, ScopeListResponse, ScopeInfo
+from src.schemas.admin import (
+    PolicyRequest,
+    PolicyResponse,
+    KillSwitchRequest,
+    KillSwitchResponse,
+    AuditLogResponse,
+    ExedraConfigRequest,
+    ExedraConfigResponse,
+    ApiKeyRequest,
+    ApiKeyUpdateRequest,
+    ApiKeyResponse,
+    CurrentApiKeyResponse,
+    ScopeListResponse,
+    ScopeInfo,
+    ProjectModeUpdateRequest,
+    ProjectModeResponse,
+)
 
 router = APIRouter(prefix="/v1/{project_code}/admin", tags=["admin"])
 
@@ -180,6 +196,56 @@ async def get_kill_switch_status(
         reason=reason,
         changed_at=changed_at,
         changed_by=changed_by
+    )
+
+
+@router.get("/project-mode", response_model=ProjectModeResponse)
+async def get_project_mode(
+    client: AuthenticatedClient = Depends(require_scopes("admin:policy:read")),
+    db: Session = Depends(get_db)
+):
+    """Retrieve the project's current operating mode (live or simulation)."""
+
+    try:
+        mode, changed_at, changed_by, reason = AdminService.get_project_mode(
+            project_id=client.project.project_id,
+            db=db
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return ProjectModeResponse(
+        mode=mode,
+        changed_at=changed_at,
+        changed_by=changed_by,
+        reason=reason
+    )
+
+
+@router.put("/project-mode", response_model=ProjectModeResponse)
+async def update_project_mode(
+    request: ProjectModeUpdateRequest,
+    client: AuthenticatedClient = Depends(require_scopes("admin:policy:update")),
+    db: Session = Depends(get_db)
+):
+    """Switch the project between live and simulation modes."""
+
+    try:
+        project, audit_entry = AdminService.update_project_mode(
+            project_id=client.project.project_id,
+            new_mode=request.mode,
+            api_client_name=client.api_client.name,
+            reason=request.reason,
+            db=db
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return ProjectModeResponse(
+        mode=project.mode,
+        changed_at=audit_entry.timestamp,
+        changed_by=client.api_client.name,
+        reason=request.reason
     )
 
 

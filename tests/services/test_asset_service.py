@@ -121,6 +121,30 @@ class TestGetAssetState:
             assert result.current_schedule_id == "local-sched-123"
             assert result.current_dim_percent is None  # No dimming data available
 
+    def test_get_asset_state_simulation_skips_exedra(self):
+        """Simulation mode should not call EXEDRA for dimming."""
+        mock_db = Mock(spec=Session)
+
+        mock_project = Mock(spec=Project)
+        mock_project.api_clients = []
+        mock_project.mode = "simulation"
+
+        mock_asset = Mock(spec=Asset)
+        mock_asset.external_id = "EXT-123"
+        mock_asset.project = mock_project
+        mock_asset.updated_at = datetime.now(timezone.utc)
+
+        with patch.object(AssetService, 'get_asset_exedra_schedule') as mock_schedule, \
+             patch('src.services.asset_service.ExedraService.get_device_dimming_level') as mock_dim:
+
+            mock_schedule.return_value = {"schedule_id": "sched-123"}
+
+            result = AssetService.get_asset_state(mock_asset, mock_db)
+
+            assert isinstance(result, AssetStateResponse)
+            assert result.current_schedule_id == "sched-123"
+            mock_dim.assert_not_called()
+
 
 class TestGetAssetDetails:
     """Tests for getting asset details"""
@@ -276,6 +300,38 @@ class TestGetAssetExedraSchedule:
         with pytest.raises(ValueError, match="No API client found"):
             AssetService.get_asset_exedra_schedule(mock_asset, mock_db)
 
+    def test_get_asset_exedra_schedule_simulation(self):
+        """Simulation mode returns local schedule without EXEDRA call."""
+        mock_db = Mock(spec=Session)
+        mock_query = Mock()
+
+        mock_project = Mock(spec=Project)
+        mock_project.mode = "simulation"
+
+        mock_asset = Mock(spec=Asset)
+        mock_asset.external_id = "EXT-123"
+        mock_asset.project = mock_project
+        mock_asset.asset_id = "asset-123"
+
+        mock_schedule = Mock(spec=Schedule)
+        mock_schedule.schedule_id = "sched-123"
+        mock_schedule.schedule = {"steps": [{"time": "00:00", "dim": 50}]}
+        mock_schedule.status = "active"
+        mock_schedule.updated_at = datetime.now(timezone.utc)
+
+        mock_db.query.return_value = mock_query
+        mock_query.filter.return_value = mock_query
+        mock_query.order_by.return_value = mock_query
+        mock_query.first.return_value = mock_schedule
+
+        with patch('src.services.asset_service.ExedraService.get_control_program') as mock_get_prog:
+            result = AssetService.get_asset_exedra_schedule(mock_asset, mock_db)
+
+        assert result["provider"] == "simulation"
+        assert result["status"] == "active"
+        assert result["steps"] == mock_schedule.schedule["steps"]
+        mock_get_prog.assert_not_called()
+
 
 class TestUpdateAssetScheduleInExedra:
     """Tests for updating asset schedule in EXEDRA"""
@@ -403,6 +459,62 @@ class TestUpdateAssetScheduleInExedra:
         assert result.schedule_id == "existing-sched-123"
         # Should not commit new schedule
         assert not mock_db.commit.called
+
+    def test_update_asset_schedule_simulation_mode(self):
+        """Simulation mode stores schedules locally without EXEDRA."""
+        mock_db = Mock(spec=Session)
+
+        mock_project = Mock(spec=Project)
+        mock_project.mode = "simulation"
+
+        mock_asset = Mock(spec=Asset)
+        mock_asset.asset_id = "asset-123"
+        mock_asset.external_id = "EXT-123"
+        mock_asset.project = mock_project
+
+        mock_active_schedule = Mock(spec=Schedule)
+        mock_active_schedule.exedra_control_program_id = None
+        mock_active_schedule.exedra_calendar_id = None
+
+        idempotency_query = Mock()
+        idempotency_query.filter.return_value = idempotency_query
+        idempotency_query.first.return_value = None
+
+        active_query = Mock()
+        active_query.filter.return_value = active_query
+        active_query.order_by.return_value = active_query
+        active_query.first.return_value = mock_active_schedule
+
+        supersede_query = Mock()
+        supersede_query.filter.return_value = supersede_query
+        supersede_query.update.return_value = None
+
+        mock_db.query.side_effect = [idempotency_query, active_query, supersede_query]
+
+        schedule_steps = [{"time": "00:00", "dim": 50}]
+
+        added_objects = []
+
+        def capture_add(obj):
+            if isinstance(obj, Schedule):
+                obj.schedule_id = "sim-sched-123"
+            added_objects.append(obj)
+
+        mock_db.add.side_effect = capture_add
+
+        with patch('src.services.asset_service.ExedraService.update_control_program') as mock_update:
+            result = AssetService.update_asset_schedule_in_exedra(
+                asset=mock_asset,
+                schedule_steps=schedule_steps,
+                actor="tester",
+                idempotency_key=None,
+                db=mock_db
+            )
+
+        assert result.schedule_id == "sim-sched-123"
+        assert result.provider == "simulation"
+        assert result.is_simulated is True
+        mock_update.assert_not_called()
 
 
 class TestCommissionAsset:
@@ -541,6 +653,40 @@ class TestCommissionAsset:
             assert mock_schedule.commission_error == "Commission failed"
             assert mock_schedule.commission_attempts == 2
             mock_db.commit.assert_called()
+
+    def test_commission_asset_simulation_mode(self):
+        """Simulation mode commissioning short-circuits without EXEDRA."""
+        mock_db = Mock(spec=Session)
+        mock_query = Mock()
+
+        mock_project = Mock(spec=Project)
+        mock_project.mode = "simulation"
+
+        mock_asset = Mock(spec=Asset)
+        mock_asset.external_id = "EXT-123"
+        mock_asset.project = mock_project
+        mock_asset.asset_id = "asset-123"
+
+        mock_schedule = Mock(spec=Schedule)
+        mock_schedule.schedule_id = "sched-123"
+        mock_schedule.status = "pending_commission"
+
+        mock_db.query.return_value = mock_query
+        mock_query.filter.return_value = mock_query
+        mock_query.order_by.return_value = mock_query
+        mock_query.first.return_value = mock_schedule
+
+        with patch('src.services.asset_service.ExedraService.commission_device') as mock_commission:
+            result = AssetService.commission_asset(
+                asset=mock_asset,
+                actor="tester",
+                db=mock_db
+            )
+
+        assert result is True
+        assert mock_schedule.status == "active"
+        assert mock_schedule.is_simulated is True
+        mock_commission.assert_not_called()
 
 
 class TestValidateGuardrails:
@@ -792,6 +938,52 @@ class TestCreateRealtimeCommand:
         assert result == "cmd-123"
         assert created_command.status == "failed"
         assert "error" in created_command.response
+
+    def test_create_realtime_command_simulation_mode(self):
+        """Realtime commands should be marked simulated when project is in simulation mode."""
+        mock_db = Mock(spec=Session)
+        mock_query = Mock()
+
+        mock_project = Mock(spec=Project)
+        mock_project.api_clients = []
+        mock_project.mode = "simulation"
+
+        mock_asset = Mock(spec=Asset)
+        mock_asset.external_id = "EXT-123"
+        mock_asset.asset_id = "asset-123"
+        mock_asset.project_id = "proj-123"
+        mock_asset.control_mode = "optimise"
+        mock_asset.project = mock_project
+
+        mock_db.query.return_value = mock_query
+        mock_query.filter.return_value = mock_query
+        mock_query.first.return_value = None
+
+        created_command = None
+
+        def capture_add(obj):
+            nonlocal created_command
+            if isinstance(obj, RealtimeCommand):
+                obj.realtime_command_id = "sim-cmd-123"
+                created_command = obj
+
+        mock_db.add.side_effect = capture_add
+        mock_db.flush.return_value = None
+
+        with patch('src.services.asset_service.ExedraService.send_device_command') as mock_send:
+            result = AssetService.create_realtime_command(
+                request=RealtimeCommandRequest(dim_percent=80, note="demo"),
+                asset=mock_asset,
+                api_client_id="client-123",
+                api_client_name="test-client",
+                idempotency_key=None,
+                db=mock_db
+            )
+
+        assert result == "sim-cmd-123"
+        assert created_command.status == "simulated"
+        assert created_command.is_simulated is True
+        mock_send.assert_not_called()
 
 
 class TestCreateAsset:

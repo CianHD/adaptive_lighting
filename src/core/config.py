@@ -32,6 +32,7 @@ class AWSSecretsManager:
 class Settings(BaseSettings):
     # DB Settings
     DATABASE_URL: str
+    DATABASE_ADMIN_URL: Optional[str] = None
     DB_POOL_SIZE: int
     DB_MAX_OVERFLOW: int
 

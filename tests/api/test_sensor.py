@@ -15,7 +15,7 @@ from src.api.sensor import (
     get_sensor,
     get_sensor_type,
     ingest_sensor_data,
-    list_luminaire_groups,
+    list_asset_groups,
     list_sensor_types,
     update_sensor,
     update_sensor_type,
@@ -165,7 +165,7 @@ class TestIngestSensorData:
 class TestListLuminaireGroups:
     """Tests for GET /sensor/groups"""
 
-    @patch('src.api.sensor.SensorService.list_luminaire_groups')
+    @patch('src.api.sensor.SensorService.list_asset_groups')
     async def test_list_groups_success(self, mock_list_groups, mock_authenticated_client, mock_db):
         """"Test successful listing of luminaire groups."""
 
@@ -178,7 +178,7 @@ class TestListLuminaireGroups:
             )
         ]
 
-        result = await list_luminaire_groups(
+        result = await list_asset_groups(
             client=mock_authenticated_client,
             db=mock_db
         )
@@ -187,14 +187,14 @@ class TestListLuminaireGroups:
         assert result[0].asset_count == 2
         mock_list_groups.assert_called_once_with(project_id="proj-123", db=mock_db)
 
-    @patch('src.api.sensor.SensorService.list_luminaire_groups')
+    @patch('src.api.sensor.SensorService.list_asset_groups')
     async def test_list_groups_unexpected_error(self, mock_list_groups, mock_authenticated_client, mock_db):
         """Test listing luminaire groups with unexpected error."""
 
         mock_list_groups.side_effect = Exception("boom")
 
         with pytest.raises(HTTPException) as exc_info:
-            await list_luminaire_groups(
+            await list_asset_groups(
                 client=mock_authenticated_client,
                 db=mock_db
             )

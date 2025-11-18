@@ -14,7 +14,8 @@ disable=
     missing-module-docstring,
     missing-class-docstring,
     wrong-import-order,
-    duplicate-code
+    duplicate-code,
+    no-member
 
 [FORMAT]
 max-line-length=120

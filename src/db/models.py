@@ -139,14 +139,16 @@ class SensorAssetLink(Base):
     sensor_asset_link_id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, server_default=text("gen_random_uuid()"))
     sensor_id: Mapped[str] = mapped_column(ForeignKey("sensor.sensor_id", ondelete="CASCADE"), nullable=False, index=True)
     asset_id: Mapped[str] = mapped_column(ForeignKey("asset.asset_id", ondelete="CASCADE"), nullable=False, index=True)
+    road_segment: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), server_default=text('now()'))
 
     sensor: Mapped[Sensor] = relationship(back_populates="links")
     asset: Mapped[Asset] = relationship(back_populates="links")
 
     __table_args__ = (
-        UniqueConstraint("sensor_id", "asset_id", name="sensor_asset_link_sensor_id_asset_id_key"),
+        UniqueConstraint("sensor_id", "asset_id", "road_segment", name="sensor_asset_link_sensor_id_asset_id_road_segment_key"),
         Index("sensor_asset_link_sensor_asset", "sensor_id", "asset_id"),
+        Index("sensor_asset_link_road_segment", "road_segment"),
     )
 
 

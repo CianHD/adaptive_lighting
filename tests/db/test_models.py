@@ -531,11 +531,12 @@ class TestSensorAssetLink:
         db_session.add_all([sensor, asset])
         db_session.commit()
 
-        link1 = SensorAssetLink(sensor_id=sensor.sensor_id, asset_id=asset.asset_id)
+        link1 = SensorAssetLink(sensor_id=sensor.sensor_id, asset_id=asset.asset_id, section="north")
         db_session.add(link1)
         db_session.commit()
 
-        link2 = SensorAssetLink(sensor_id=sensor.sensor_id, asset_id=asset.asset_id)
+        # Same sensor, asset, and section should violate unique constraint
+        link2 = SensorAssetLink(sensor_id=sensor.sensor_id, asset_id=asset.asset_id, section="north")
         db_session.add(link2)
 
         with pytest.raises(IntegrityError):

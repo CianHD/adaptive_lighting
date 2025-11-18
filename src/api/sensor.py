@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError, DatabaseError, SQLAlchemyError
 from src.core.security import AuthenticatedClient, require_scopes
 from src.db.session import get_db
 from src.services.sensor_service import SensorService
-from src.schemas.sensor import SensorIngestRequest, SensorIngestResponse, SensorResponse, SensorCreateRequest, SensorCreateResponse, SensorUpdateRequest, SensorUpdateResponse,SensorTypeCreateRequest, SensorTypeCreateResponse, SensorTypeUpdateRequest, SensorTypeUpdateResponse, SensorTypeResponse
+from src.schemas.sensor import SensorAssetLinkInfo, SensorAssetGroup, SensorIngestRequest, SensorIngestResponse, SensorResponse, SensorCreateRequest, SensorCreateResponse, SensorUpdateRequest, SensorUpdateResponse, SensorTypeCreateRequest, SensorTypeCreateResponse, SensorTypeUpdateRequest, SensorTypeUpdateResponse, SensorTypeResponse
 
 router = APIRouter(prefix="/v1/{project_code}/sensor", tags=["sensor"])
 
@@ -55,6 +55,26 @@ async def ingest_sensor_data(
 
 
 # Sensor Endpoints
+@router.get("/groups", response_model=List[SensorAssetGroup])
+async def list_asset_groups(
+    client: AuthenticatedClient = Depends(require_scopes("sensor:metadata")),
+    db: Session = Depends(get_db)
+):
+    """List asset (luminaire) groups derived from sensor section links."""
+
+    try:
+        return SensorService.list_asset_groups(
+            project_id=client.project.project_id,
+            db=db
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list asset groups due to an unexpected error"
+        ) from e
+
+
 @router.get("/{external_id}", response_model=SensorResponse)
 async def get_sensor(
     external_id: str,
@@ -85,26 +105,38 @@ async def create_sensor(
     db: Session = Depends(get_db)
 ):
     """
-    Create a new sensor with asset links.
+    Create a new sensor with asset links and optional sections.
     
     Creates a sensor record and links it to the specified assets.
+    Each link can optionally specify a section identifier.
     """
     try:
+        # Convert SensorAssetLinkInfo objects to dicts
+        asset_links = [
+            {"asset_exedra_id": link.asset_exedra_id, "section": link.section}
+            for link in request.asset_links
+        ]
+
         sensor = SensorService.create_sensor(
             external_id=request.external_id,
             project_id=client.project.project_id,
             sensor_type_id=request.sensor_type_id,
-            asset_external_ids=request.asset_exedra_ids,
+            asset_links=asset_links,
             metadata=request.metadata,
             actor=client.api_client.name,
             db=db
         )
 
+        # Get created links with sections
+        linked_assets = []
+        for link in sensor.links:
+            linked_assets.append(SensorAssetLinkInfo(asset_exedra_id=link.asset.external_id, section=link.section))
+
         return SensorCreateResponse(
             sensor_id=sensor.sensor_id,
             external_id=sensor.external_id,
             sensor_type_id=sensor.sensor_type_id,
-            linked_assets=request.asset_exedra_ids,
+            linked_assets=linked_assets,
             metadata=sensor.sensor_metadata,
             created_at=sensor.created_at
         )
@@ -138,27 +170,35 @@ async def update_sensor(
     db: Session = Depends(get_db)
 ):
     """
-    Update a sensor's details and asset links.
+    Update a sensor's details and asset links with sections.
     
-    Updates sensor type, asset links, and metadata.
+    Updates sensor type, asset links with optional sections, and metadata.
     """
     try:
+        # Convert SensorAssetLinkInfo objects to dicts if provided
+        asset_links = None
+        if request.asset_links is not None:
+            asset_links = [
+                {"asset_exedra_id": link.asset_exedra_id, "section": link.section}
+                for link in request.asset_links
+            ]
+
         sensor = SensorService.update_sensor(
             external_id=external_id,
             project_id=client.project.project_id,
             sensor_type_id=request.sensor_type_id,
-            asset_external_ids=request.asset_exedra_ids,
+            asset_links=asset_links,
             metadata=request.metadata,
             actor=client.api_client.name,
             db=db
         )
 
-        # Get current asset links
+        # Get current asset links with sections
         linked_assets = []
         if sensor.links:
             for link in sensor.links:
                 if link.asset:
-                    linked_assets.append(link.asset.external_id)
+                    linked_assets.append(SensorAssetLinkInfo(asset_exedra_id=link.asset.external_id, section=link.section))
 
         return SensorUpdateResponse(
             sensor_id=sensor.sensor_id,

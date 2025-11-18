@@ -27,6 +27,7 @@ from src.schemas.asset import (
     AssetUpdateRequest,
 )
 from src.schemas.command import RealtimeCommandRequest, ScheduleRequest, ScheduleStep
+from src.db.models import Schedule
 
 
 @pytest.fixture
@@ -322,7 +323,12 @@ class TestUpdateAssetSchedule:
                                            mock_authenticated_client, mock_db, mock_asset):
         """Test successful schedule update."""
         mock_get_by_id.return_value = mock_asset
-        mock_update_schedule.return_value = "sched-123"
+
+        mock_schedule = Mock(spec=Schedule)
+        mock_schedule.schedule_id = "sched-123"
+        mock_schedule.updated_at = datetime.now(timezone.utc)
+        mock_schedule.created_at = datetime.now(timezone.utc)
+        mock_update_schedule.return_value = mock_schedule
 
         request = ScheduleRequest(
             steps=[

@@ -399,7 +399,8 @@ class TestUpdateAssetScheduleInExedra:
             db=mock_db
         )
 
-        assert result == "existing-sched-123"
+        assert result == existing_schedule
+        assert result.schedule_id == "existing-sched-123"
         # Should not commit new schedule
         assert not mock_db.commit.called
 

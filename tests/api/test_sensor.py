@@ -15,11 +15,14 @@ from src.api.sensor import (
     get_sensor,
     get_sensor_type,
     ingest_sensor_data,
+    list_luminaire_groups,
     list_sensor_types,
     update_sensor,
     update_sensor_type,
 )
 from src.schemas.sensor import (
+    SensorAssetLinkInfo,
+    SensorAssetGroup,
     SensorCreateRequest,
     SensorIngestRequest,
     SensorResponse,
@@ -96,7 +99,8 @@ class TestIngestSensorData:
             observed_at=datetime.now(timezone.utc),
             vehicle_count=10,
             pedestrian_count=5,
-            avg_vehicle_speed_kmh=45.5
+            avg_vehicle_speed_kmh=45.5,
+            section="northbound"
         )
 
         result = await ingest_sensor_data(
@@ -158,6 +162,46 @@ class TestIngestSensorData:
         assert exc_info.value.status_code == 400
 
 
+class TestListLuminaireGroups:
+    """Tests for GET /sensor/groups"""
+
+    @patch('src.api.sensor.SensorService.list_luminaire_groups')
+    async def test_list_groups_success(self, mock_list_groups, mock_authenticated_client, mock_db):
+        """"Test successful listing of luminaire groups."""
+
+        mock_list_groups.return_value = [
+            SensorAssetGroup(
+                sensor_external_id="S-1",
+                section="north",
+                asset_exedra_ids=["asset-1", "asset-2"],
+                asset_count=2
+            )
+        ]
+
+        result = await list_luminaire_groups(
+            client=mock_authenticated_client,
+            db=mock_db
+        )
+
+        assert len(result) == 1
+        assert result[0].asset_count == 2
+        mock_list_groups.assert_called_once_with(project_id="proj-123", db=mock_db)
+
+    @patch('src.api.sensor.SensorService.list_luminaire_groups')
+    async def test_list_groups_unexpected_error(self, mock_list_groups, mock_authenticated_client, mock_db):
+        """Test listing luminaire groups with unexpected error."""
+
+        mock_list_groups.side_effect = Exception("boom")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await list_luminaire_groups(
+                client=mock_authenticated_client,
+                db=mock_db
+            )
+
+        assert exc_info.value.status_code == 500
+
+
 class TestGetSensor:
     """Tests for GET /sensor/{external_id}"""
 
@@ -167,7 +211,7 @@ class TestGetSensor:
         mock_get_details.return_value = SensorResponse(
             external_id="ext-sensor-1",
             sensor_type="TrafficSensor-5000",
-            asset_exedra_ids=["asset-1"],
+            linked_assets=[SensorAssetLinkInfo(asset_exedra_id="asset-1", section="east")],
             vendor="Acme Corp",
             name="Sensor 1",
             capabilities=["vehicle_count", "speed"],
@@ -210,12 +254,29 @@ class TestCreateSensor:
         mock_sensor,
     ):
         """Test successful sensor creation."""
+        # Add mock links to sensor
+        mock_link1 = Mock()
+        mock_asset1 = Mock()
+        mock_asset1.external_id = "asset-1"
+        mock_link1.asset = mock_asset1
+        mock_link1.section = "north"
+
+        mock_link2 = Mock()
+        mock_asset2 = Mock()
+        mock_asset2.external_id = "asset-2"
+        mock_link2.asset = mock_asset2
+        mock_link2.section = None
+
+        mock_sensor.links = [mock_link1, mock_link2]
         mock_create.return_value = mock_sensor
 
         request = SensorCreateRequest(
             external_id="ext-sensor-1",
             sensor_type_id="type-123",
-            asset_exedra_ids=["asset-1", "asset-2"],
+            asset_links=[
+                SensorAssetLinkInfo(asset_exedra_id="asset-1", section="north"),
+                SensorAssetLinkInfo(asset_exedra_id="asset-2", section=None)
+            ],
             metadata={"location": "intersection-1"}
         )
 
@@ -228,6 +289,10 @@ class TestCreateSensor:
         assert result.sensor_id == "sensor-123"
         assert result.external_id == "ext-sensor-1"
         assert len(result.linked_assets) == 2
+        assert result.linked_assets[0].asset_exedra_id == "asset-1"
+        assert result.linked_assets[0].section == "north"
+        assert result.linked_assets[1].asset_exedra_id == "asset-2"
+        assert result.linked_assets[1].section is None
 
     @patch('src.api.sensor.SensorService.create_sensor')
     async def test_create_sensor_value_error(self, mock_create, mock_authenticated_client, mock_db):
@@ -237,7 +302,7 @@ class TestCreateSensor:
         request = SensorCreateRequest(
             external_id="ext-sensor-1",
             sensor_type_id="invalid",
-            asset_exedra_ids=[]
+            asset_links=[]
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -258,7 +323,7 @@ class TestCreateSensor:
         request = SensorCreateRequest(
             external_id="ext-sensor-1",
             sensor_type_id="type-123",
-            asset_exedra_ids=[]
+            asset_links=[]
         )
 
         with pytest.raises(HTTPException) as exc_info:
@@ -284,13 +349,14 @@ class TestUpdateSensor:
         mock_asset = Mock()
         mock_asset.external_id = "asset-1"
         mock_link.asset = mock_asset
+        mock_link.section = "west"  # Set actual string value, not Mock
         mock_sensor.links = [mock_link]
 
         mock_update.return_value = mock_sensor
 
         request = SensorUpdateRequest(
             sensor_type_id="type-123",
-            asset_exedra_ids=["asset-1"],
+            asset_links=[SensorAssetLinkInfo(asset_exedra_id="asset-1", section="west")],
             metadata={"location": "updated"}
         )
 
@@ -311,7 +377,7 @@ class TestUpdateSensor:
 
         request = SensorUpdateRequest(
             sensor_type_id="type-123",
-            asset_exedra_ids=[]
+            asset_links=[]
         )
 
         with pytest.raises(HTTPException) as exc_info:

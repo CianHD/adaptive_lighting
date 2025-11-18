@@ -154,6 +154,26 @@ Comprehensive handlers for all common error scenarios:
 3. **Sensor Ingestion**: Verify data ingestion with proper validation
 4. **Error Scenarios**: Test comprehensive error handling and audit logging
 
+## Database Migrations (Alembic)
+
+Schema changes are managed through [Alembic](https://alembic.sqlalchemy.org/). To create and apply migrations:
+
+1. Install project dependencies (both `requirements.txt` and `requirements-dev.txt` include Alembic).
+2. Ensure `DATABASE_URL` is available in your environment (the same value used by the API).
+3. Create a revision (add `--autogenerate` to diff against the ORM models):
+	```bash
+	alembic revision -m "describe change"
+	```
+4. Review/edit the generated file inside `alembic/versions/`.
+5. Apply migrations:
+	```bash
+	alembic upgrade head
+	```
+6. Roll back if required:
+	```bash
+	alembic downgrade -1
+	```
+
 ## Current Implementation Status
 
 ### ✅ Completed Features

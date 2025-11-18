@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.schemas.sensor import (
+    SensorAssetLinkInfo,
     SensorCreateRequest,
     SensorCreateResponse,
     SensorIngestRequest,
@@ -31,14 +32,15 @@ class TestSensorIngestRequest:
         request = SensorIngestRequest(
             sensor_external_id="sensor-123",
             observed_at=now,
+            section="northbound",
             vehicle_count=25,
             pedestrian_count=10,
-            avg_vehicle_speed_kmh=45.5,
-            p85_vehicle_speed_kmh=52.3
+            avg_vehicle_speed_kmh=45.5
         )
         assert request.sensor_external_id == "sensor-123"
         assert request.vehicle_count == 25
         assert request.pedestrian_count == 10
+        assert request.section == "northbound"
 
     def test_sensor_ingest_minimal(self):
         """Test sensor ingest with only required fields."""
@@ -50,6 +52,7 @@ class TestSensorIngestRequest:
         assert request.vehicle_count is None
         assert request.pedestrian_count is None
         assert request.avg_vehicle_speed_kmh is None
+        assert request.section is None
 
     def test_sensor_ingest_negative_counts_rejected(self):
         """Test that negative counts are rejected."""
@@ -109,14 +112,18 @@ class TestSensorResponse:
         sensor = SensorResponse(
             external_id="sensor-123",
             sensor_type="traffic_counter",
-            asset_exedra_ids=["asset-1", "asset-2"],
+            linked_assets=[
+                SensorAssetLinkInfo(asset_exedra_id="asset-1", section="north"),
+                SensorAssetLinkInfo(asset_exedra_id="asset-2", section=None)
+            ],
             vendor="ACME Corp",
             name="Main St Sensor",
             capabilities=["vehicle_count", "speed"],
             metadata={"location": "Main St", "install_date": "2024-01-01"}
         )
         assert sensor.external_id == "sensor-123"
-        assert len(sensor.asset_exedra_ids) == 2
+        assert len(sensor.linked_assets) == 2
+        assert sensor.linked_assets[0].section == "north"
         assert "vehicle_count" in sensor.capabilities
 
 
@@ -143,11 +150,15 @@ class TestSensorCreateRequest:
         request = SensorCreateRequest(
             external_id="sensor-123",
             sensor_type_id="type-456",
-            asset_exedra_ids=["asset-1", "asset-2"],
+            asset_links=[
+                SensorAssetLinkInfo(asset_exedra_id="asset-1", section="east"),
+                SensorAssetLinkInfo(asset_exedra_id="asset-2", section=None)
+            ],
             metadata={"location": "Main St"}
         )
         assert request.external_id == "sensor-123"
-        assert len(request.asset_exedra_ids) == 2
+        assert len(request.asset_links) == 2
+        assert request.asset_links[0].section == "east"
         assert request.metadata["location"] == "Main St"
 
     def test_sensor_create_without_metadata(self):
@@ -155,7 +166,7 @@ class TestSensorCreateRequest:
         request = SensorCreateRequest(
             external_id="sensor-123",
             sensor_type_id="type-456",
-            asset_exedra_ids=["asset-1"]
+            asset_links=[SensorAssetLinkInfo(asset_exedra_id="asset-1", section=None)]
         )
         assert request.metadata == {}
 
@@ -164,7 +175,7 @@ class TestSensorCreateRequest:
         with pytest.raises(ValidationError) as exc_info:
             SensorCreateRequest(external_id="sensor-123")
         assert "sensor_type_id" in str(exc_info.value)
-        assert "asset_exedra_ids" in str(exc_info.value)
+        assert "asset_links" in str(exc_info.value)
 
 
 class TestSensorCreateResponse:
@@ -177,7 +188,10 @@ class TestSensorCreateResponse:
             sensor_id="sen-123",
             external_id="sensor-123",
             sensor_type_id="type-456",
-            linked_assets=["asset-1", "asset-2"],
+            linked_assets=[
+                SensorAssetLinkInfo(asset_exedra_id="asset-1", section="west"),
+                SensorAssetLinkInfo(asset_exedra_id="asset-2", section=None)
+            ],
             metadata={"location": "Main St"},
             created_at=now
         )
@@ -192,17 +206,21 @@ class TestSensorUpdateRequest:
         """Test sensor update with all fields."""
         request = SensorUpdateRequest(
             sensor_type_id="new-type-789",
-            asset_exedra_ids=["asset-3", "asset-4", "asset-5"],
+            asset_links=[
+                SensorAssetLinkInfo(asset_exedra_id="asset-3", section="north"),
+                SensorAssetLinkInfo(asset_exedra_id="asset-4", section=None),
+                SensorAssetLinkInfo(asset_exedra_id="asset-5", section="south")
+            ],
             metadata={"updated": True}
         )
         assert request.sensor_type_id == "new-type-789"
-        assert len(request.asset_exedra_ids) == 3
+        assert len(request.asset_links) == 3
 
     def test_sensor_update_partial(self):
         """Test sensor update with partial fields."""
         request = SensorUpdateRequest(metadata={"note": "Relocated"})
         assert request.sensor_type_id is None
-        assert request.asset_exedra_ids is None
+        assert request.asset_links is None
         assert request.metadata["note"] == "Relocated"
 
 

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, DatabaseError, SQLAlchemyError
 
 from src.db.models import Sensor, Asset, SensorType, VehicleReading, PedReading, SpeedReading, SensorAssetLink, AuditLog
-from src.schemas.sensor import SensorIngestRequest, SensorResponse
+from src.schemas.sensor import SensorIngestRequest, SensorResponse, SensorAssetLinkInfo, SensorAssetGroup
 
 
 class SensorService:
@@ -58,8 +58,8 @@ class SensorService:
             # Vehicle count data
             if request.vehicle_count is not None:
                 vehicle_data = {"vehicle_count": request.vehicle_count}
-                if request.p85_vehicle_speed_kmh is not None:
-                    vehicle_data["p85_speed_kmh"] = request.p85_vehicle_speed_kmh
+                if request.section is not None:
+                    vehicle_data["section"] = request.section
 
                 hash_unique = SensorService.create_reading_hash(
                     sensor.sensor_id, request.observed_at, vehicle_data
@@ -70,7 +70,8 @@ class SensorService:
                     timestamp=request.observed_at,
                     veh_count=request.vehicle_count,
                     hash_unique=hash_unique,
-                    source=api_client_name
+                    source=api_client_name,
+                    section=request.section
                 )
                 db.add(vehicle_reading)
                 db.flush()
@@ -79,6 +80,8 @@ class SensorService:
             # Pedestrian count data
             if request.pedestrian_count is not None:
                 ped_data = {"pedestrian_count": request.pedestrian_count}
+                if request.section is not None:
+                    ped_data["section"] = request.section
                 hash_unique = SensorService.create_reading_hash(
                     sensor.sensor_id, request.observed_at, ped_data
                 )
@@ -88,7 +91,8 @@ class SensorService:
                     timestamp=request.observed_at,
                     ped_count=request.pedestrian_count,
                     hash_unique=hash_unique,
-                    source=api_client_name
+                    source=api_client_name,
+                    section=request.section
                 )
                 db.add(ped_reading)
                 db.flush()
@@ -97,8 +101,8 @@ class SensorService:
             # Speed data
             if request.avg_vehicle_speed_kmh is not None:
                 speed_data = {"avg_speed_kmh": request.avg_vehicle_speed_kmh}
-                if request.p85_vehicle_speed_kmh is not None:
-                    speed_data["p85_speed_kmh"] = request.p85_vehicle_speed_kmh
+                if request.section is not None:
+                    speed_data["section"] = request.section
 
                 hash_unique = SensorService.create_reading_hash(
                     sensor.sensor_id, request.observed_at, speed_data
@@ -108,9 +112,9 @@ class SensorService:
                     sensor_id=sensor.sensor_id,
                     timestamp=request.observed_at,
                     avg_speed_kmh=request.avg_vehicle_speed_kmh,
-                    p85_speed_kmh=request.p85_vehicle_speed_kmh,
                     hash_unique=hash_unique,
-                    source=api_client_name
+                    source=api_client_name,
+                    section=request.section
                 )
                 db.add(speed_reading)
                 db.flush()
@@ -127,6 +131,7 @@ class SensorService:
                     "sensor_external_id": request.sensor_external_id,
                     "api_client": api_client_name,
                     "reading_types": list(reading_ids.keys()),
+                    "section": request.section,
                     "timestamp": request.observed_at.isoformat(),
                     "idempotency_key": idempotency_key
                 }
@@ -149,7 +154,7 @@ class SensorService:
     @staticmethod
     def get_sensor_details(external_id: str, project_id: str, db: Session) -> SensorResponse:
         """
-        Get sensor details including linked assets.
+        Get sensor details including linked assets with sections.
 
         Args:
             external_id: External ID of the sensor
@@ -170,21 +175,25 @@ class SensorService:
         if not sensor:
             raise ValueError(f"Sensor {external_id} not found")
 
-        # Get linked assets
-        asset_links = db.query(SensorAssetLink).filter(
+        # Get linked assets with sections
+        asset_links = db.query(SensorAssetLink, Asset).join(
+            Asset, SensorAssetLink.asset_id == Asset.asset_id
+        ).filter(
             SensorAssetLink.sensor_id == sensor.sensor_id
         ).all()
 
-        asset_external_ids = []
-        for link in asset_links:
-            asset = db.query(Asset).filter(Asset.asset_id == link.asset_id).first()
-            if asset:
-                asset_external_ids.append(asset.external_id)
+        linked_assets = [
+            SensorAssetLinkInfo(
+                asset_exedra_id=asset.external_id,
+                section=link.section
+            )
+            for link, asset in asset_links
+        ]
 
         return SensorResponse(
             external_id=sensor.external_id,
             sensor_type=f"{sensor.sensor_type.manufacturer} {sensor.sensor_type.model}",
-            asset_exedra_ids=asset_external_ids,
+            linked_assets=linked_assets,
             vendor=sensor.sensor_metadata.get("vendor"),
             name=sensor.sensor_metadata.get("name"),
             capabilities=sensor.sensor_type.capabilities,
@@ -196,19 +205,19 @@ class SensorService:
         external_id: str,
         project_id: str,
         sensor_type_id: str,
-        asset_external_ids: List[str],
+        asset_links: List[Dict[str, Optional[str]]],
         metadata: Dict[str, Any],
         actor: str = "unknown",
         db: Session = None
     ) -> Sensor:
         """
-        Create a new sensor with asset links.
+        Create a new sensor with asset links including sections.
 
         Args:
             external_id: External sensor identifier
             project_id: Project ID for tenant isolation
             sensor_type_id: ID of the sensor type
-            asset_external_ids: List of asset external IDs to link to
+            asset_links: List of dicts with asset_exedra_id and optional section
             metadata: Additional sensor metadata
             actor: Who is performing the creation
             db: Database session
@@ -234,14 +243,15 @@ class SensorService:
         if not sensor_type:
             raise ValueError(f"Sensor type with ID '{sensor_type_id}' not found")
 
-        # Validate all assets exist in the project
+        # Extract asset external IDs and validate all assets exist
+        asset_external_ids = [link["asset_exedra_id"] for link in asset_links]
         assets = db.query(Asset).filter(
             Asset.project_id == project_id,
             Asset.external_id.in_(asset_external_ids)
         ).all()
 
-        found_external_ids = {asset.external_id for asset in assets}
-        missing_external_ids = set(asset_external_ids) - found_external_ids
+        found_external_ids = {asset.external_id: asset for asset in assets}
+        missing_external_ids = set(asset_external_ids) - set(found_external_ids.keys())
         if missing_external_ids:
             raise ValueError(f"Assets not found in this project: {', '.join(missing_external_ids)}")
 
@@ -256,11 +266,13 @@ class SensorService:
             db.add(sensor)
             db.flush()  # Get the sensor_id
 
-            # Create asset links
-            for asset in assets:
+            # Create asset links with sections
+            for link_info in asset_links:
+                asset = found_external_ids[link_info["asset_exedra_id"]]
                 link = SensorAssetLink(
                     sensor_id=sensor.sensor_id,
-                    asset_id=asset.asset_id
+                    asset_id=asset.asset_id,
+                    section=link_info.get("section")
                 )
                 db.add(link)
 
@@ -274,7 +286,7 @@ class SensorService:
                 details={
                     "external_id": external_id,
                     "sensor_type_id": sensor_type_id,
-                    "linked_assets": asset_external_ids,
+                    "linked_assets": asset_links,
                     "metadata_fields": list(metadata.keys()) if metadata else []
                 }
             )
@@ -297,19 +309,19 @@ class SensorService:
         external_id: str,
         project_id: str,
         sensor_type_id: Optional[str] = None,
-        asset_external_ids: Optional[List[str]] = None,
+        asset_links: Optional[List[Dict[str, Optional[str]]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         actor: str = "unknown",
         db: Session = None
     ) -> Sensor:
         """
-        Update a sensor's details and asset links.
+        Update a sensor's details and asset links with sections.
 
         Args:
             external_id: External sensor identifier
             project_id: Project ID for tenant isolation
             sensor_type_id: Updated sensor type ID
-            asset_external_ids: Updated list of asset external IDs to link to
+            asset_links: Updated list of dicts with asset_exedra_id and optional section
             metadata: Updated sensor metadata (merged with existing)
             actor: Who is performing the update
             db: Database session
@@ -330,7 +342,7 @@ class SensorService:
             raise ValueError(f"Sensor with external_id '{external_id}' not found in this project")
 
         # Check if any updates are provided
-        if not any([sensor_type_id, asset_external_ids is not None, metadata]):
+        if not any([sensor_type_id, asset_links is not None, metadata]):
             raise ValueError("At least one field must be provided for update")
 
         try:
@@ -350,15 +362,16 @@ class SensorService:
                 sensor.sensor_metadata = current_metadata
 
             # Update asset links if provided
-            if asset_external_ids is not None:
-                # Validate all assets exist in the project
+            if asset_links is not None:
+                # Extract asset external IDs and validate all assets exist
+                asset_external_ids = [link["asset_exedra_id"] for link in asset_links]
                 assets = db.query(Asset).filter(
                     Asset.project_id == project_id,
                     Asset.external_id.in_(asset_external_ids)
                 ).all()
 
-                found_external_ids = {asset.external_id for asset in assets}
-                missing_external_ids = set(asset_external_ids) - found_external_ids
+                found_external_ids = {asset.external_id: asset for asset in assets}
+                missing_external_ids = set(asset_external_ids) - set(found_external_ids.keys())
                 if missing_external_ids:
                     raise ValueError(f"Assets not found in this project: {', '.join(missing_external_ids)}")
 
@@ -367,11 +380,13 @@ class SensorService:
                     SensorAssetLink.sensor_id == sensor.sensor_id
                 ).delete()
 
-                # Create new links
-                for asset in assets:
+                # Create new links with sections
+                for link_info in asset_links:
+                    asset = found_external_ids[link_info["asset_exedra_id"]]
                     link = SensorAssetLink(
                         sensor_id=sensor.sensor_id,
-                        asset_id=asset.asset_id
+                        asset_id=asset.asset_id,
+                        section=link_info.get("section")
                     )
                     db.add(link)
 
@@ -386,7 +401,7 @@ class SensorService:
                     "external_id": external_id,
                     "updated_fields": {
                         "sensor_type_id": sensor_type_id,
-                        "asset_links_updated": asset_external_ids is not None,
+                        "asset_links_updated": asset_links is not None,
                         "metadata_updated": metadata is not None
                     }
                 }
@@ -458,6 +473,55 @@ class SensorService:
             raise RuntimeError(f"Database error during sensor deletion: {str(e)}") from e
 
         return True
+
+    @staticmethod
+    def list_asset_groups(
+        project_id: str,
+        db: Session
+    ) -> List[SensorAssetGroup]:
+        """Return grouped assets for each sensor section within a project."""
+
+        rows = (
+            db.query(
+                Sensor.sensor_id.label("sensor_id"),
+                Sensor.external_id.label("sensor_external_id"),
+                SensorAssetLink.section.label("section"),
+                Asset.external_id.label("asset_external_id")
+            )
+            .join(SensorAssetLink, Sensor.sensor_id == SensorAssetLink.sensor_id)
+            .join(Asset, SensorAssetLink.asset_id == Asset.asset_id)
+            .filter(Sensor.project_id == project_id)
+            .order_by(Sensor.external_id, SensorAssetLink.section, Asset.external_id)
+            .all()
+        )
+
+        if not rows:
+            return []
+
+        grouped: Dict[Tuple[str, Optional[str]], Dict[str, Any]] = {}
+
+        for row in rows:
+            key = (row.sensor_id, row.section)
+            if key not in grouped:
+                grouped[key] = {
+                    "sensor_external_id": row.sensor_external_id,
+                    "section": row.section,
+                    "assets": []
+                }
+            grouped[key]["assets"].append(row.asset_external_id)
+
+        response = [
+            SensorAssetGroup(
+                sensor_external_id=group["sensor_external_id"],
+                section=group["section"],
+                asset_exedra_ids=group["assets"],
+                asset_count=len(group["assets"])
+            )
+            for group in grouped.values()
+        ]
+
+        response.sort(key=lambda grp: (grp.sensor_external_id, grp.section or ""))
+        return response
 
 
 class SensorTypeService:

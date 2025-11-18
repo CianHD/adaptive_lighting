@@ -62,7 +62,7 @@ class TestIngestSensorData:
             sensor_external_id="EXT-SENSOR-1",
             observed_at=datetime.now(timezone.utc),
             vehicle_count=15,
-            p85_vehicle_speed_kmh=60
+            section="northbound"
         )
 
         added_objects = []
@@ -85,7 +85,11 @@ class TestIngestSensorData:
         assert "vehicle" in reading_ids
         assert dedup is False
         assert any(isinstance(obj, VehicleReading) for obj in added_objects)
-        assert any(isinstance(obj, AuditLog) for obj in added_objects)
+        vehicle_reading = next(obj for obj in added_objects if isinstance(obj, VehicleReading))
+        assert vehicle_reading.section == "northbound"
+        audit_entries = [obj for obj in added_objects if isinstance(obj, AuditLog)]
+        assert audit_entries
+        assert audit_entries[0].details["section"] == "northbound"
         mock_db.commit.assert_called_once()
 
     def test_ingest_sensor_data_all_types(self):
@@ -106,7 +110,7 @@ class TestIngestSensorData:
             vehicle_count=15,
             pedestrian_count=5,
             avg_vehicle_speed_kmh=45,
-            p85_vehicle_speed_kmh=60
+            section="northbound"
         )
 
         added_objects = []
@@ -134,6 +138,12 @@ class TestIngestSensorData:
         assert "pedestrian" in reading_ids
         assert "speed" in reading_ids
         assert dedup is False
+        vehicle_reading = next(obj for obj in added_objects if isinstance(obj, VehicleReading))
+        ped_reading = next(obj for obj in added_objects if isinstance(obj, PedReading))
+        speed_reading = next(obj for obj in added_objects if isinstance(obj, SpeedReading))
+        assert vehicle_reading.section == "northbound"
+        assert ped_reading.section == "northbound"
+        assert speed_reading.section == "northbound"
         mock_db.commit.assert_called_once()
 
     def test_ingest_sensor_data_sensor_not_found(self):
@@ -228,35 +238,25 @@ class TestGetSensorDetails:
         mock_link = Mock(spec=SensorAssetLink)
         mock_link.sensor_id = "sensor-123"
         mock_link.asset_id = "asset-123"
+        mock_link.section = "north"
 
-        # Setup query chains
-        query_count = [0]
-        def query_side_effect(model):
-            mock_query = Mock()
-            mock_query.filter.return_value = mock_query
-            mock_query.all.return_value = []
+        # Setup query: first returns sensor, second returns joined (link, asset) tuples
+        mock_query = Mock()
+        mock_query.filter.return_value = mock_query
+        mock_query.join.return_value = mock_query
+        mock_query.first.return_value = mock_sensor
+        mock_query.all.return_value = [(mock_link, mock_asset)]
 
-            query_count[0] += 1
-            if query_count[0] == 1:
-                # First query: get sensor
-                mock_query.first.return_value = mock_sensor
-            elif query_count[0] == 2:
-                # Second query: get sensor asset links
-                mock_query.all.return_value = [mock_link]
-            else:
-                # Third+ queries: get assets
-                mock_query.first.return_value = mock_asset
-
-            return mock_query
-
-        mock_db.query.side_effect = query_side_effect
+        mock_db.query.return_value = mock_query
 
         result = SensorService.get_sensor_details("EXT-SENSOR-1", "proj-123", mock_db)
 
         assert isinstance(result, SensorResponse)
         assert result.external_id == "EXT-SENSOR-1"
         assert result.sensor_type == "ACME Counter-3000"
-        assert "EXT-ASSET-1" in result.asset_exedra_ids
+        assert len(result.linked_assets) == 1
+        assert result.linked_assets[0].asset_exedra_id == "EXT-ASSET-1"
+        assert result.linked_assets[0].section == "north"
         assert result.vendor == "VendorX"
 
     def test_get_sensor_details_not_found(self):
@@ -276,7 +276,7 @@ class TestCreateSensor:
     """Tests for sensor creation"""
 
     def test_create_sensor_success(self):
-        """Test successful sensor creation"""
+        """Test successful sensor creation with sections"""
         mock_db = Mock(spec=Session)
 
         mock_sensor_type = Mock(spec=SensorType)
@@ -322,7 +322,7 @@ class TestCreateSensor:
             external_id="EXT-SENSOR-NEW",
             project_id="proj-123",
             sensor_type_id="type-123",
-            asset_external_ids=["EXT-ASSET-1"],
+            asset_links=[{"asset_exedra_id": "EXT-ASSET-1", "section": "north"}],
             metadata={"vendor": "VendorX"},
             actor="test-actor",
             db=mock_db
@@ -331,9 +331,14 @@ class TestCreateSensor:
         assert isinstance(result, Sensor)
         assert result.sensor_id == "new-sensor-123"
 
-        # Verify sensor asset link created
+        # Verify sensor asset link created with section
         link_created = any(isinstance(obj, SensorAssetLink) for obj in added_objects)
         assert link_created
+
+        # Check that section was set
+        links = [obj for obj in added_objects if isinstance(obj, SensorAssetLink)]
+        assert len(links) == 1
+        assert links[0].section == "north"
 
         mock_db.commit.assert_called_once()
 
@@ -353,7 +358,7 @@ class TestCreateSensor:
                 external_id="EXT-SENSOR-1",
                 project_id="proj-123",
                 sensor_type_id="type-123",
-                asset_external_ids=["EXT-ASSET-1"],
+                asset_links=[{"asset_exedra_id": "EXT-ASSET-1", "section": None}],
                 metadata={},
                 db=mock_db
             )
@@ -384,7 +389,7 @@ class TestCreateSensor:
                 external_id="EXT-SENSOR-NEW",
                 project_id="proj-123",
                 sensor_type_id="type-999",
-                asset_external_ids=["EXT-ASSET-1"],
+                asset_links=[{"asset_exedra_id": "EXT-ASSET-1", "section": None}],
                 metadata={},
                 db=mock_db
             )
@@ -422,7 +427,7 @@ class TestCreateSensor:
                 external_id="EXT-SENSOR-NEW",
                 project_id="proj-123",
                 sensor_type_id="type-123",
-                asset_external_ids=["EXT-ASSET-999"],
+                asset_links=[{"asset_exedra_id": "EXT-ASSET-999", "section": None}],
                 metadata={},
                 db=mock_db
             )
@@ -465,7 +470,7 @@ class TestCreateSensor:
                 external_id="EXT-SENSOR-NEW",
                 project_id="proj-123",
                 sensor_type_id="type-123",
-                asset_external_ids=["EXT-ASSET-1"],
+                asset_links=[{"asset_exedra_id": "EXT-ASSET-1", "section": None}],
                 metadata={},
                 db=mock_db
             )
@@ -520,7 +525,7 @@ class TestUpdateSensor:
             external_id="EXT-SENSOR-1",
             project_id="proj-123",
             sensor_type_id="type-456",
-            asset_external_ids=["EXT-ASSET-1"],
+            asset_links=[{"asset_exedra_id": "EXT-ASSET-1", "section": "south"}],
             metadata={"new": "data"},
             actor="test-actor",
             db=mock_db
@@ -529,6 +534,12 @@ class TestUpdateSensor:
         assert result == mock_sensor
         assert mock_sensor.sensor_type_id == "type-456"
         assert mock_sensor.sensor_metadata["new"] == "data"
+
+        # Verify section was set on the link
+        links = [obj for obj in mock_db.add.call_args_list if isinstance(obj[0][0], SensorAssetLink)]
+        assert len(links) == 1
+        assert links[0][0][0].section == "south"
+
         mock_db.commit.assert_called_once()
 
     def test_update_sensor_not_found(self):
@@ -660,6 +671,58 @@ class TestDeleteSensor:
             )
 
         mock_db.rollback.assert_called_once()
+
+
+class TestListAssetGroups:
+    """Tests for SensorService.list_asset_groups"""
+
+    class _Row:
+        def __init__(self, sensor_id, sensor_external_id, section, asset_external_id):
+            self.sensor_id = sensor_id
+            self.sensor_external_id = sensor_external_id
+            self.section = section
+            self.asset_external_id = asset_external_id
+
+    def test_list_asset_groups_returns_grouped_results(self):
+        """Test listing asset groups returns correctly grouped results"""
+
+        mock_db = Mock(spec=Session)
+        mock_query = Mock()
+
+        mock_db.query.return_value = mock_query
+        mock_query.join.return_value = mock_query
+        mock_query.filter.return_value = mock_query
+        mock_query.order_by.return_value = mock_query
+        mock_query.all.return_value = [
+            self._Row("sensor-1", "S-1", "north", "asset-1"),
+            self._Row("sensor-1", "S-1", "north", "asset-2"),
+            self._Row("sensor-1", "S-1", "south", "asset-3"),
+            self._Row("sensor-2", "S-2", None, "asset-4"),
+        ]
+
+        results = SensorService.list_asset_groups("proj-123", mock_db)
+
+        assert len(results) == 3
+        assert results[0].sensor_external_id == "S-1"
+        assert results[0].asset_exedra_ids == ["asset-1", "asset-2"]
+        assert results[0].asset_count == 2
+        assert any(group.section is None for group in results)
+
+    def test_list_asset_groups_returns_empty_when_no_rows(self):
+        """Test listing asset groups when no data exists"""
+
+        mock_db = Mock(spec=Session)
+        mock_query = Mock()
+
+        mock_db.query.return_value = mock_query
+        mock_query.join.return_value = mock_query
+        mock_query.filter.return_value = mock_query
+        mock_query.order_by.return_value = mock_query
+        mock_query.all.return_value = []
+
+        results = SensorService.list_asset_groups("proj-123", mock_db)
+
+        assert results == []
 
 
 class TestCreateSensorType:

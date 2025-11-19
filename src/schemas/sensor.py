@@ -37,8 +37,8 @@ class SensorResponse(BaseModel):
     external_id: str
     sensor_type: str
     linked_assets: List[SensorAssetLinkInfo]
-    vendor: Optional[str] = None
-    name: Optional[str] = None
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
     capabilities: List[str]
     metadata: Dict[str, Any]
 

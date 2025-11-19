@@ -257,7 +257,7 @@ class TestGetSensorDetails:
         assert len(result.linked_assets) == 1
         assert result.linked_assets[0].asset_exedra_id == "EXT-ASSET-1"
         assert result.linked_assets[0].section == "north"
-        assert result.vendor == "VendorX"
+        assert result.manufacturer == "ACME"
 
     def test_get_sensor_details_not_found(self):
         """Test getting details when sensor doesn't exist"""

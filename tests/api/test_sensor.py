@@ -212,8 +212,8 @@ class TestGetSensor:
             external_id="ext-sensor-1",
             sensor_type="TrafficSensor-5000",
             linked_assets=[SensorAssetLinkInfo(asset_exedra_id="asset-1", section="east")],
-            vendor="Acme Corp",
-            name="Sensor 1",
+            manufacturer="Acme Corp",
+            model="Sensor 1",
             capabilities=["vehicle_count", "speed"],
             metadata={"location": "intersection-1"}
         )

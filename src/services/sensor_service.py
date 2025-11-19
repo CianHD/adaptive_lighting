@@ -194,8 +194,8 @@ class SensorService:
             external_id=sensor.external_id,
             sensor_type=f"{sensor.sensor_type.manufacturer} {sensor.sensor_type.model}",
             linked_assets=linked_assets,
-            vendor=sensor.sensor_metadata.get("vendor"),
-            name=sensor.sensor_metadata.get("name"),
+            manufacturer=sensor.sensor_type.manufacturer,
+            model=sensor.sensor_type.model,
             capabilities=sensor.sensor_type.capabilities,
             metadata=sensor.sensor_metadata
         )

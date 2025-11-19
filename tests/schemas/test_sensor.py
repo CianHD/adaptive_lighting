@@ -116,8 +116,8 @@ class TestSensorResponse:
                 SensorAssetLinkInfo(asset_exedra_id="asset-1", section="north"),
                 SensorAssetLinkInfo(asset_exedra_id="asset-2", section=None)
             ],
-            vendor="ACME Corp",
-            name="Main St Sensor",
+            manufacturer="ACME Corp",
+            model="Main St Sensor",
             capabilities=["vehicle_count", "speed"],
             metadata={"location": "Main St", "install_date": "2024-01-01"}
         )

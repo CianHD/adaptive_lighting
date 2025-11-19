@@ -133,6 +133,7 @@ class TestSensorTypeResponse:
     def test_sensor_type_response(self):
         """Test sensor type response."""
         sensor_type = SensorTypeResponse(
+            sensor_type_id="sens-type-001",
             manufacturer="ACME",
             model="TC-2000",
             capabilities=["vehicle_count", "speed", "classification"],
@@ -254,36 +255,43 @@ class TestSensorTypeCreateRequest:
 class TestRealtimeCommandRequest:
     """Test realtime command request schema."""
 
-    def test_realtime_command_request_with_sensor(self):
-        """Test realtime command with sensor external ID."""
+    def test_realtime_command_request_with_duration(self):
+        """Test realtime command with duration."""
         request = RealtimeCommandRequest(
-            sensor_external_id="sensor-123",
             dim_percent=75,
+            duration_minutes=30,
             note="Testing dimming"
         )
-        assert request.sensor_external_id == "sensor-123"
         assert request.dim_percent == 75
+        assert request.duration_minutes == 30
         assert request.note == "Testing dimming"
 
-    def test_realtime_command_request_without_sensor(self):
-        """Test realtime command without sensor (broadcast)."""
-        request = RealtimeCommandRequest(dim_percent=50)
-        assert request.sensor_external_id is None
-        assert request.dim_percent == 50
+    def test_realtime_command_request_requires_duration(self):
+        """Missing duration should be rejected."""
+        with pytest.raises(ValidationError) as exc_info:
+            RealtimeCommandRequest(dim_percent=50)
+        assert "duration_minutes" in str(exc_info.value)
 
     def test_realtime_command_dim_percent_validation_low(self):
         """Test dim percent below 0 is rejected."""
         with pytest.raises(ValidationError) as exc_info:
-            RealtimeCommandRequest(dim_percent=-1)
+            RealtimeCommandRequest(dim_percent=-1, duration_minutes=10)
         assert "greater than or equal to 0" in str(exc_info.value).lower()
 
     def test_realtime_command_dim_percent_validation_high(self):
         """Test dim percent above 100 is rejected."""
         with pytest.raises(ValidationError) as exc_info:
-            RealtimeCommandRequest(dim_percent=101)
+            RealtimeCommandRequest(dim_percent=101, duration_minutes=10)
         assert "less than or equal to 100" in str(exc_info.value).lower()
 
+    def test_realtime_command_duration_validation_bounds(self):
+        """Ensure duration must be within allowed limits."""
+        with pytest.raises(ValidationError):
+            RealtimeCommandRequest(dim_percent=50, duration_minutes=0)
+        with pytest.raises(ValidationError):
+            RealtimeCommandRequest(dim_percent=50, duration_minutes=2000)
 
+# TODO: Why is this here instead of being in a test_command file?
 class TestRealtimeCommandResponse:
     """Test realtime command response schema."""
 
@@ -293,11 +301,13 @@ class TestRealtimeCommandResponse:
         response = RealtimeCommandResponse(
             command_id="cmd-123",
             status="accepted",
+            duration_minutes=30,
             message="Command sent successfully",
             timestamp=now
         )
         assert response.command_id == "cmd-123"
         assert response.status == "accepted"
+        assert response.duration_minutes == 30
 
 
 class TestScheduleSchemas:

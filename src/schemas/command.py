@@ -5,14 +5,15 @@ from datetime import datetime
 # Realtime command schemas
 class RealtimeCommandRequest(BaseModel):
     """Request to set immediate dimming level"""
-    sensor_external_id: Optional[str] = None
     dim_percent: int = Field(ge=0, le=100)
+    duration_minutes: int = Field(ge=1, le=1440)
     note: Optional[str] = None
 
 class RealtimeCommandResponse(BaseModel):
     """Response for realtime command"""
     command_id: str
     status: str  # "accepted", "rejected", "simulated"
+    duration_minutes: int
     message: Optional[str] = None
     timestamp: datetime
 

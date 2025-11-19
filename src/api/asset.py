@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, DatabaseError, SQLAlchemyError
 
 from src.core.security import AuthenticatedClient, require_scopes
+from src.api import INTERNAL_DOC_TAG
 from src.db.session import get_db
 from src.services.asset_service import AssetService
 from src.schemas.asset import AssetStateResponse, AssetResponse, AssetControlModeRequest, AssetControlModeResponse, AssetCreateRequest, AssetCreateResponse, AssetUpdateRequest, AssetUpdateResponse
@@ -45,11 +46,10 @@ async def create_asset(
     db: Session = Depends(get_db)
 ):
     """
-    Create a new asset with EXEDRA integration.
+    Create a new asset within the Flux Adaptive Lighting API.
     
-    Creates an asset record with the provided EXEDRA ID as the external_id,
-    stores the EXEDRA device name in the name column, and initializes a 
-    schedule record with the provided control program and calendar IDs.
+    Creates an asset record with the provided EXEDRA and initializes a 
+    schedule record with the provided EXEDRA control program and calendar IDs.
     """
     try:
         asset = AssetService.create_asset(
@@ -109,7 +109,7 @@ async def update_asset(
     """
     Update an asset's details.
     
-    Updates EXEDRA device information and metadata. The exedra_id (EXEDRA device ID)
+    Updates asset information and metadata. The exedra_id
     cannot be changed as it's the immutable identifier for the device.
     """
     try:
@@ -165,8 +165,7 @@ async def delete_asset(
 ):
     """
     Delete an asset and its associated data.
-    
-    Removes the asset from the system along with all related records.
+
     This action cannot be undone.
     """
     try:
@@ -211,8 +210,7 @@ async def get_asset_schedule(
     Get the current schedule for an asset.
     
     This endpoint fetches the live schedule directly from the EXEDRA system
-    for compliance validation, ensuring the schedule data reflects what is
-    actually active in the lighting control system.
+    for validation.
     """
     # Find the asset
     asset = AssetService.get_asset_by_external_id(
@@ -268,9 +266,13 @@ async def update_asset_schedule(
     Update an asset's schedule.
     
     This endpoint updates the lighting schedule directly in the EXEDRA system.
-    All schedule operations go through EXEDRA for compliance validation.
     Schedules are pre-created and associated with assets - this endpoint
-    updates the existing schedule rather than creating a new one.
+    only updates the existing schedule rather than creating a new one.
+
+    A device will need to be commissioned for a schedule to take effect, this
+    may take a few minutes. The commissioning runs as a background task and will
+    automatically retry up to 3 times on failure. If it still fails, a manual
+    commissioning can be attempted using the /commission/{exedra_id} endpoint.
     """
     # Find the asset
     asset = AssetService.get_asset_by_external_id(
@@ -331,9 +333,10 @@ async def get_asset_state(
     db: Session = Depends(get_db)
 ):
     """
-    Get current state of an asset including dimming level and active schedule.
+    Get current state of an asset including dimming level and the ID of the active schedule.
     
-    This is a validation endpoint for checking asset state by EXEDRA device ID.
+    This endpoint fetches the live state directly from the EXEDRA system
+    for validation.
     """
 
     # Find the asset
@@ -363,11 +366,7 @@ async def realtime_command(
     db: Session = Depends(get_db)
 ):
     """
-    Submit a real-time dimming command for an asset.
-    
-    Behavior depends on asset control mode:
-    - optimise: Requires command:override scope, applies policy guardrails
-    - passthrough: Accepts and relays with basic validation only
+    Submit a real-time dimming command for an asset that lasts for the specified amount of time.
     """
 
     # Find the asset
@@ -393,11 +392,11 @@ async def realtime_command(
 
     # Mode-specific handling
     if asset.control_mode == "optimise":
-        # Require override scope for optimize mode
-        if not client.has_scope("command:override"):
+        # Require override scope for optimise mode
+        if not client.has_scope("command:override"): # TODO: Update this behavour after developing optimise mode
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Optimize mode assets require command:override scope"
+                detail="Optimise mode assets require command:override scope"
             )
 
         # Apply policy guardrails
@@ -423,13 +422,14 @@ async def realtime_command(
     return RealtimeCommandResponse(
         command_id=command_id,
         status=status_msg,
+        duration_minutes=request.duration_minutes,
         message=f"Command queued for {asset.control_mode} mode relay",
         timestamp=datetime.now(timezone.utc)
     )
 
 
 # Asset Control Endpoints
-@router.put("/mode/{exedra_id}", response_model=AssetControlModeResponse)
+@router.put("/mode/{exedra_id}", response_model=AssetControlModeResponse, tags=["asset", INTERNAL_DOC_TAG])
 async def update_asset_control_mode(
     exedra_id: str,
     request: AssetControlModeRequest,
@@ -528,7 +528,7 @@ async def commission_asset(
         ) from e
 
 
-@router.post("/process-pending-commissions")
+@router.post("/process-pending-commissions", tags=["asset", INTERNAL_DOC_TAG])
 async def process_pending_commissions(
     _client: AuthenticatedClient = Depends(require_scopes("admin:system")),
     db: Session = Depends(get_db)

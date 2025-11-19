@@ -377,8 +377,9 @@ class TestCreateScheduleFromSteps:
 
     def test_create_schedule_from_steps_empty_list(self):
         """Should return empty list for empty input"""
-    commands = ExedraService.create_schedule_from_steps([])
-    assert not commands
+        commands = ExedraService.create_schedule_from_steps([])
+
+        assert not commands
 
 
 class TestSendDeviceCommand:
@@ -392,6 +393,7 @@ class TestSendDeviceCommand:
         token = "test-token"
         base_url = "https://exedra.test"
         level = 75
+        duration_seconds = 180
 
         mock_response = Mock()
         mock_response.status_code = 200
@@ -400,39 +402,70 @@ class TestSendDeviceCommand:
 
         # Act
         result = ExedraService.send_device_command(
-            device_id, "setDimmingLevel", level, token, base_url
+            device_id,
+            "setDimmingLevel",
+            level,
+            duration_seconds,
+            token,
+            base_url
         )
 
         # Assert
         assert result["status"] == "success"
         mock_put.assert_called_once()
         call_args = mock_put.call_args
-        assert call_args[1]["json"]["deviceId"] == device_id
-        assert call_args[1]["json"]["command"] == "setDimmingLevel"
-        assert call_args[1]["json"]["level"] == level
+        payload = call_args[1]["json"]
+        assert payload["id"] == device_id
+        assert payload["command"] == "setDimmingLevel"
+        assert payload["level"] == level
+        assert payload["duration"] == duration_seconds
 
     def test_send_device_command_empty_token(self):
         """Should raise ValueError for empty token"""
         with pytest.raises(ValueError, match="EXEDRA token cannot be empty"):
-            ExedraService.send_device_command("device-123", "setDimmingLevel", 50, "", "base_url")
+            ExedraService.send_device_command(
+                "device-123",
+                "setDimmingLevel",
+                50,
+                60,
+                "",
+                "base_url"
+            )
 
     def test_send_device_command_empty_base_url(self):
         """Should raise ValueError for empty base_url"""
         with pytest.raises(ValueError, match="EXEDRA base URL cannot be empty"):
-            ExedraService.send_device_command("device-123", "setDimmingLevel", 50, "token", "")
+            ExedraService.send_device_command(
+                "device-123",
+                "setDimmingLevel",
+                50,
+                60,
+                "token",
+                ""
+            )
 
     def test_send_device_command_set_dimming_no_level(self):
         """Should raise ValueError if setDimmingLevel command has no level"""
         with pytest.raises(ValueError, match="setDimmingLevel requires level 0-100"):
             ExedraService.send_device_command(
-                "device-123", "setDimmingLevel", None, "token", "https://exedra.test"
+                "device-123",
+                "setDimmingLevel",
+                None,
+                60,
+                "token",
+                "https://exedra.test"
             )
 
     def test_send_device_command_set_dimming_level_out_of_range(self):
         """Should raise ValueError if level is out of range"""
         with pytest.raises(ValueError, match="setDimmingLevel requires level 0-100"):
             ExedraService.send_device_command(
-                "device-123", "setDimmingLevel", 101, "token", "https://exedra.test"
+                "device-123",
+                "setDimmingLevel",
+                101,
+                60,
+                "token",
+                "https://exedra.test"
             )
 
     @patch('src.services.exedra_service.requests.put')
@@ -445,7 +478,12 @@ class TestSendDeviceCommand:
 
         with pytest.raises(requests.HTTPError, match="EXEDRA device command failed: 400"):
             ExedraService.send_device_command(
-                "device-123", "setDimmingLevel", 50, "token", "https://exedra.test"
+                "device-123",
+                "setDimmingLevel",
+                50,
+                60,
+                "token",
+                "https://exedra.test"
             )
 
     @patch('src.services.exedra_service.requests.put')
@@ -459,7 +497,12 @@ class TestSendDeviceCommand:
 
         with pytest.raises(requests.HTTPError, match="EXEDRA device command failed: 500"):
             ExedraService.send_device_command(
-                "device-123", "setDimmingLevel", 50, "token", "https://exedra.test"
+                "device-123",
+                "setDimmingLevel",
+                50,
+                60,
+                "token",
+                "https://exedra.test"
             )
 
 

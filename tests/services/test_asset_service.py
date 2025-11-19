@@ -22,10 +22,12 @@ class TestGetAssetByExternalId:
         """Test getting asset when it exists"""
         mock_db = Mock(spec=Session)
         mock_query = Mock()
-
         mock_asset = Mock(spec=Asset)
-        mock_asset.external_id = "EXT-123"
+        mock_project = Mock(spec=Project)
+        mock_project.mode = "live"
+        mock_asset.project = mock_project
         mock_asset.project_id = "proj-123"
+        mock_asset.external_id = "EXT-123"
 
         mock_db.query.return_value = mock_query
         mock_query.filter.return_value = mock_query
@@ -437,6 +439,10 @@ class TestUpdateAssetScheduleInExedra:
 
         mock_asset = Mock(spec=Asset)
         mock_asset.asset_id = "asset-123"
+        mock_project = Mock(spec=Project)
+        mock_project.mode = "live"
+        mock_asset.project = mock_project
+        mock_asset.project_id = "proj-123"
 
         existing_schedule = Mock(spec=Schedule)
         existing_schedule.schedule_id = "existing-sched-123"
@@ -570,6 +576,10 @@ class TestCommissionAsset:
         mock_query = Mock()
 
         mock_asset = Mock(spec=Asset)
+        mock_project = Mock(spec=Project)
+        mock_project.mode = "live"
+        mock_asset.project = mock_project
+        mock_asset.project_id = "proj-123"
         mock_asset.external_id = "EXT-123"
 
         mock_db.query.return_value = mock_query
@@ -590,6 +600,10 @@ class TestCommissionAsset:
         mock_query = Mock()
 
         mock_asset = Mock(spec=Asset)
+        mock_project = Mock(spec=Project)
+        mock_project.mode = "live"
+        mock_asset.project = mock_project
+        mock_asset.project_id = "proj-123"
         mock_asset.external_id = "EXT-123"
 
         mock_schedule = Mock(spec=Schedule)
@@ -828,7 +842,7 @@ class TestCreateRealtimeCommand:
         mock_asset.project_id = "proj-123"
         mock_asset.control_mode = "optimise"
 
-        request = RealtimeCommandRequest(dim_percent=75, note="Test command")
+        request = RealtimeCommandRequest(dim_percent=75, duration_minutes=30, note="Test command")
 
         # Setup query to return None for idempotency check (no existing command)
         mock_db.query.return_value = mock_query
@@ -865,7 +879,17 @@ class TestCreateRealtimeCommand:
 
             assert result == "cmd-123"
             assert created_command.status == "sent"
+            assert created_command.duration_minutes == 30
             assert mock_db.commit.call_count >= 1
+            mock_send.assert_called_once_with(
+                device_id="EXT-123",
+                command_type="setDimmingLevel",
+                level=75,
+                duration_seconds=1800,
+                request_id="cmd-123",
+                token="test-token",
+                base_url="https://api.exedra.com"
+            )
 
     def test_create_realtime_command_idempotency(self):
         """Test realtime command idempotency"""
@@ -873,6 +897,10 @@ class TestCreateRealtimeCommand:
         mock_query = Mock()
 
         mock_asset = Mock(spec=Asset)
+        mock_project = Mock(spec=Project)
+        mock_project.mode = "live"
+        mock_asset.project = mock_project
+        mock_asset.project_id = "proj-123"
 
         existing_command = Mock(spec=RealtimeCommand)
         existing_command.realtime_command_id = "existing-cmd-123"
@@ -881,7 +909,7 @@ class TestCreateRealtimeCommand:
         mock_query.filter.return_value = mock_query
         mock_query.first.return_value = existing_command
 
-        request = RealtimeCommandRequest(dim_percent=75)
+        request = RealtimeCommandRequest(dim_percent=75, duration_minutes=10)
 
         result = AssetService.create_realtime_command(
             request=request,
@@ -914,9 +942,10 @@ class TestCreateRealtimeCommand:
         mock_query.filter.return_value = mock_query
         mock_query.first.return_value = None
 
-        request = RealtimeCommandRequest(dim_percent=75)
+        request = RealtimeCommandRequest(dim_percent=75, duration_minutes=20)
 
         created_command = None
+
         def capture_add(obj):
             nonlocal created_command
             if isinstance(obj, RealtimeCommand):
@@ -972,7 +1001,7 @@ class TestCreateRealtimeCommand:
 
         with patch('src.services.asset_service.ExedraService.send_device_command') as mock_send:
             result = AssetService.create_realtime_command(
-                request=RealtimeCommandRequest(dim_percent=80, note="demo"),
+                request=RealtimeCommandRequest(dim_percent=80, duration_minutes=15, note="demo"),
                 asset=mock_asset,
                 api_client_id="client-123",
                 api_client_name="test-client",

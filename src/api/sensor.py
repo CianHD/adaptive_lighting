@@ -22,9 +22,8 @@ async def ingest_sensor_data(
     """
     Ingest sensor data from external sources.
     
-    Accepts vehicle counts, pedestrian counts, and speed data.
-    Data is stored in separate tables for performance and clarity.
-    Deduplication is handled via unique constraints on sensor_id + timestamp.
+    Accepts vehicle counts, pedestrian counts, and speed data. Section is an optional field 
+    identifying the section or direction of the sensor reading.
     """
 
     try:
@@ -287,6 +286,7 @@ async def list_sensor_types(
 
         return [
             SensorTypeResponse(
+                sensor_type_id=st.sensor_type_id,
                 manufacturer=st.manufacturer,
                 model=st.model,
                 capabilities=st.capabilities,
@@ -318,6 +318,7 @@ async def get_sensor_type(
         )
 
         return SensorTypeResponse(
+            sensor_type_id=sensor_type.sensor_type_id,
             manufacturer=sensor_type.manufacturer,
             model=sensor_type.model,
             capabilities=sensor_type.capabilities,

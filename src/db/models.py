@@ -214,6 +214,7 @@ class RealtimeCommand(Base):
     asset_id: Mapped[str] = mapped_column(ForeignKey("asset.asset_id", ondelete="CASCADE"), nullable=False, index=True)
     requested_at: Mapped["datetime"] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text('now()'))
     dim_percent: Mapped[int] = mapped_column(Integer, nullable=False)
+    duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     source_mode: Mapped[str] = mapped_column(String, nullable=False)  # optimise|passthrough
     vendor: Mapped[str | None] = mapped_column(String)
     algo_version: Mapped[str | None] = mapped_column(String)
@@ -226,6 +227,7 @@ class RealtimeCommand(Base):
 
     __table_args__ = (
         CheckConstraint("dim_percent BETWEEN 0 AND 100", name="realtime_command_dim_percent_check"),
+        CheckConstraint("duration_minutes BETWEEN 1 AND 1440", name="realtime_command_duration_minutes_check"),
         Index("realtime_cmd_asset_ts", "asset_id", "requested_at"),
         UniqueConstraint("requested_by_api_client", "idempotency_key", name="realtime_command_client_idempotency_key"),
     )

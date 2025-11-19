@@ -428,7 +428,7 @@ class TestRealtimeCommand:
         mock_validate_policy.return_value = (True, None)
         mock_create_cmd.return_value = "cmd-123"
 
-        request = RealtimeCommandRequest(dim_percent=75)
+        request = RealtimeCommandRequest(dim_percent=75, duration_minutes=30)
 
         result = await realtime_command(
             exedra_id="exedra-device-1",
@@ -440,6 +440,7 @@ class TestRealtimeCommand:
 
         assert result.command_id == "cmd-123"
         assert result.status == "accepted_with_policy"
+        assert result.duration_minutes == 30
         mock_validate_policy.assert_called_once()
 
     @patch('src.api.asset.AssetService.get_asset_by_external_id')
@@ -454,7 +455,7 @@ class TestRealtimeCommand:
         mock_validate_basic.return_value = (True, None)
         mock_create_cmd.return_value = "cmd-123"
 
-        request = RealtimeCommandRequest(dim_percent=75)
+        request = RealtimeCommandRequest(dim_percent=75, duration_minutes=45)
 
         result = await realtime_command(
             exedra_id="exedra-device-1",
@@ -465,6 +466,7 @@ class TestRealtimeCommand:
 
         assert result.command_id == "cmd-123"
         assert result.status == "accepted"
+        assert result.duration_minutes == 45
 
     @patch('src.api.asset.AssetService.get_asset_by_external_id')
     @patch('src.api.asset.AssetService.validate_basic_guardrails')
@@ -474,7 +476,7 @@ class TestRealtimeCommand:
         mock_get_by_id.return_value = mock_asset
         mock_validate_basic.return_value = (False, "Dim level out of range")
 
-        request = RealtimeCommandRequest(dim_percent=100)  # Valid value, but will be rejected by mock guardrails
+        request = RealtimeCommandRequest(dim_percent=100, duration_minutes=60)  # Valid value, but will be rejected by mock guardrails
 
         with pytest.raises(HTTPException) as exc_info:
             await realtime_command(
@@ -497,7 +499,7 @@ class TestRealtimeCommand:
         mock_authenticated_client.scopes = ["asset:command"]  # Remove command:override
         mock_authenticated_client.has_scope = lambda scope: scope in mock_authenticated_client.scopes
 
-        request = RealtimeCommandRequest(dim_percent=75)
+        request = RealtimeCommandRequest(dim_percent=75, duration_minutes=30)
 
         with pytest.raises(HTTPException) as exc_info:
             await realtime_command(

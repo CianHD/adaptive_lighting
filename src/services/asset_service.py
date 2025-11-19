@@ -701,7 +701,7 @@ class AssetService:
     @staticmethod
     def validate_policy_guardrails(asset: Asset, dim_percent: int, db: Session) -> tuple[bool, Optional[str]]:
         """
-        Apply policy-level guardrails (only in optimize mode).
+        Apply policy-level guardrails (only in optimise mode).
         
         Args:
             asset: Asset to validate against
@@ -790,6 +790,7 @@ class AssetService:
         command = RealtimeCommand(
             asset_id=asset.asset_id,
             dim_percent=request.dim_percent,
+            duration_minutes=request.duration_minutes,
             source_mode=asset.control_mode,
             vendor=api_client_name,
             status="pending",  # Will be updated to "sent" or "failed" after EXEDRA call
@@ -811,6 +812,7 @@ class AssetService:
             details={
                 "asset_external_id": asset.external_id,
                 "dim_percent": request.dim_percent,
+                "duration_minutes": request.duration_minutes,
                 "control_mode": asset.control_mode,
                 "api_client": api_client_name,
                 "note": request.note,
@@ -844,10 +846,13 @@ class AssetService:
                 raise ValueError(f"No EXEDRA base URL found for client {api_client.name}")
 
             # Send realtime command to EXEDRA
+            duration_seconds = request.duration_minutes * 60
             result = ExedraService.send_device_command(
                 device_id=asset.external_id,
                 command_type="setDimmingLevel",
                 level=request.dim_percent,
+                duration_seconds=duration_seconds,
+                request_id=command.realtime_command_id,
                 token=exedra_config["token"],
                 base_url=exedra_config["base_url"]
             )

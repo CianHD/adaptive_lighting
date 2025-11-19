@@ -239,7 +239,14 @@ class ExedraService:
         return commands
 
     @staticmethod
-    def send_device_command(device_id: str, command_type: str, level: Optional[int], token: str, base_url: str) -> Dict[str, Any]:
+    def send_device_command(
+        device_id: str,
+        command_type: str,
+        level: Optional[int],
+        duration_seconds: Optional[int],
+        token: str,
+        base_url: str,
+    ) -> Dict[str, Any]:
         """
         Send real-time command to EXEDRA device
         
@@ -247,6 +254,7 @@ class ExedraService:
             device_id: EXEDRA device identifier
             command_type: "setDimmingLevel" for now, extensible for future commands
             level: Dimming level 0-100 (required for setDimmingLevel)
+            duration_seconds: Duration in seconds for which command should hold
             token: EXEDRA API token
             base_url: EXEDRA base URL
         Returns:
@@ -268,21 +276,18 @@ class ExedraService:
 
         # Build payload based on command type
         payload = {
-            "command": command_type
+            "id": device_id,
+            "command": command_type,
+            "level": level,
+            "duration": duration_seconds
         }
-
-        if command_type == "setDimmingLevel":
-            payload["level"] = level
 
         # Send command to EXEDRA
         headers = ExedraService._get_headers(token)
 
         response = requests.put(
             f"{base_url}/api/v1/devices/command",
-            json={
-                "deviceId": device_id,
-                **payload
-            },
+            json=payload,
             headers=headers,
             verify=EXEDRA_VERIFY_SSL,
             timeout=30.0

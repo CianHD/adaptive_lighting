@@ -44,6 +44,7 @@ class SensorResponse(BaseModel):
 
 class SensorTypeResponse(BaseModel):
     """Sensor type details"""
+    sensor_type_id: str
     manufacturer: str
     model: str
     capabilities: List[str]

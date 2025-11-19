@@ -205,4 +205,9 @@ The API is fully documented with OpenAPI/Swagger and includes:
 - Example requests and responses for all endpoints
 - Detailed error response documentation with problem details format
 
-Access the interactive API documentation at: `http://localhost:8000/docs`
+### Dual documentation views
+
+- Public docs: `http://localhost:8000/docs` (excludes endpoints tagged with `INTERNAL_DOC_TAG` like admin operations)
+- Internal docs: `http://localhost:8000/internal/docs` (shows the complete schema, including internal/admin routes)
+
+Because the OpenAPI schemas are cached in-memory for performance, any change that affects documentation (e.g., tagging a route as internal) requires restarting the FastAPI server to refresh both Swagger views. If you need to regenerate the schema without a restart, call the helper functions in `src/main.py` with `force=True` inside a Python shell.
